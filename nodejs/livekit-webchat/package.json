@@ -1,0 +1,20 @@
+{
+  "name": "livekit-webchat",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "LiveKit demo: OpenAI generates responses; AvatarTalk streams to LiveKit via /ws/infer",
+  "scripts": {
+    "start": "node src/app.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "livekit-server-sdk": "^2.6.1",
+    "multer": "^1.4.5-lts.1",
+    "nunjucks": "^3.2.4",
+    "openai": "^4.56.0",
+    "ws": "^8.17.0"
+  }
+}
+

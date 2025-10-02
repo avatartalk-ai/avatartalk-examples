@@ -1,0 +1,25 @@
+[project]
+name = "livekit-webchat"
+version = "0.1.0"
+description = "LiveKit demo: OpenAI generates responses; AvatarTalk streams to LiveKit via /ws/infer"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.30.0",
+  "jinja2>=3.1.4",
+  "requests>=2.32.3",
+  "python-dotenv>=1.0.1",
+  "openai>=1.46.0",
+  "python-multipart>=0.0.20",
+  "websocket-client>=1.8.0",
+  "livekit>=0.16.0",
+  "websockets>=11.0",
+  "livekit-api>=1.0.5",
+]
+
+[project.scripts]
+livekit-webchat = "livekit_webchat.__main__:main"
+
+[tool.uv]
+package = true

@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AvatarTalk · LiveKit WebChat</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; padding: 0; background: #0b1020; color: #e7e9ee; }
+      .container { max-width: 980px; margin: 0 auto; padding: 24px; }
+      h1 { margin: 0 0 12px; font-size: 22px; }
+      .small { color: #9aa3b2; font-size: 12px; margin-bottom: 16px; }
+      .chat { background: #0f1428; border: 1px solid #1f2a44; border-radius: 12px; padding: 16px; min-height: 280px; }
+      .msg { padding: 8px 10px; margin: 6px 0; border-radius: 8px; max-width: 80%; white-space: pre-wrap; }
+      .user { background: #1b2645; align-self: flex-end; }
+      .assistant { background: #152036; }
+      .row { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+      input[type=text] { flex: 1; min-width: 240px; padding: 10px 12px; border-radius: 8px; border: 1px solid #314066; background: #0f1428; color: #e7e9ee; }
+      button { padding: 10px 14px; border-radius: 8px; border: 1px solid #314066; background: #1b2645; color: #e7e9ee; cursor: pointer; }
+      button:disabled { opacity: 0.6; cursor: wait; }
+      .panel { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+      .content { display:flex; gap:16px; align-items:flex-start; flex-wrap: wrap; }
+      .left { flex: 1 1 360px; min-width: 320px; }
+      .right { flex: 0 0 auto; width: 100%; max-width: 512px; }
+      #livekitContainer { width: 100%; max-width: 512px; aspect-ratio: 1 / 1; border-radius: 8px; border: 1px solid #1f2a44; background: #000; overflow: hidden; }
+      #livekitContainer video, #livekitContainer audio { width: 100%; height: 100%; object-fit: cover; display: block; }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
+  </head>
+  <body>
+    <div class="container">
+      <h1>AvatarTalk · LiveKit WebChat</h1>
+      <div class="small">Model: {{ model }} · Avatar: {{ avatar }} · Emotion: {{ emotion }} · Language: {{ language }}</div>
+
+      <div class="panel">
+        <label>Avatar
+          <select id="sel-avatar">
+            <option value="japanese_man" {{ 'selected' if avatar=='japanese_man' else '' }}>Japanese Man</option>
+            <option value="old_european_woman" {{ 'selected' if avatar=='old_european_woman' else '' }}>Elderly Woman</option>
+            <option value="european_woman" {{ 'selected' if avatar=='european_woman' else '' }}>European Woman</option>
+            <option value="european_man" {{ 'selected' if avatar=='european_man' else '' }}>European Man</option>
+            <option value="black_man" {{ 'selected' if avatar=='black_man' else '' }}>Black Man</option>
+            <option value="black_woman" {{ 'selected' if avatar=='black_woman' else '' }}>Black Woman</option>
+            <option value="japanese_woman" {{ 'selected' if avatar=='japanese_woman' else '' }}>Japanese Woman</option>
+            <option value="iranian_man" {{ 'selected' if avatar=='iranian_man' else '' }}>Iranian Man</option>
+            <option value="mexican_man" {{ 'selected' if avatar=='mexican_man' else '' }}>Mexican Man</option>
+            <option value="mexican_woman" {{ 'selected' if avatar=='mexican_woman' else '' }}>Mexican Woman</option>
+            <option value="colombian_woman" {{ 'selected' if avatar=='colombian_woman' else '' }}>Colombian Woman</option>
+            <option value="old_asian_man" {{ 'selected' if avatar=='old_asian_man' else '' }}>Elderly Asian Man</option>
+            <option value="arab_man" {{ 'selected' if avatar=='arab_man' else '' }}>Arab Man</option>
+            <option value="arab_woman" {{ 'selected' if avatar=='arab_woman' else '' }}>Arab Woman</option>
+          </select>
+        </label>
+        <label>Emotion
+          <select id="sel-emotion">
+            <option value="neutral" {{ 'selected' if emotion=='neutral' else '' }}>Neutral</option>
+            <option value="happy" {{ 'selected' if emotion=='happy' else '' }}>Happy</option>
+            <option value="serious" {{ 'selected' if emotion=='serious' else '' }}>Serious</option>
+          </select>
+        </label>
+        <label>Language
+          <select id="sel-language">
+            <option value="en" {{ 'selected' if language=='en' else '' }}>English (en)</option>
+            <option value="es" {{ 'selected' if language=='es' else '' }}>Spanish (es)</option>
+            <option value="fr" {{ 'selected' if language=='fr' else '' }}>French (fr)</option>
+            <option value="de" {{ 'selected' if language=='de' else '' }}>German (de)</option>
+            <option value="it" {{ 'selected' if language=='it' else '' }}>Italian (it)</option>
+            <option value="pt" {{ 'selected' if language=='pt' else '' }}>Portuguese (pt)</option>
+            <option value="pl" {{ 'selected' if language=='pl' else '' }}>Polish (pl)</option>
+            <option value="tr" {{ 'selected' if language=='tr' else '' }}>Turkish (tr)</option>
+            <option value="ru" {{ 'selected' if language=='ru' else '' }}>Russian (ru)</option>
+            <option value="nl" {{ 'selected' if language=='nl' else '' }}>Dutch (nl)</option>
+            <option value="cs" {{ 'selected' if language=='cs' else '' }}>Czech (cs)</option>
+            <option value="ar" {{ 'selected' if language=='ar' else '' }}>Arabic (ar)</option>
+            <option value="cn" {{ 'selected' if language=='cn' else '' }}>Chinese (cn)</option>
+            <option value="ja" {{ 'selected' if language=='ja' else '' }}>Japanese (ja)</option>
+            <option value="hu" {{ 'selected' if language=='hu' else '' }}>Hungarian (hu)</option>
+            <option value="ko" {{ 'selected' if language=='ko' else '' }}>Korean (ko)</option>
+            <option value="hi" {{ 'selected' if language=='hi' else '' }}>Hindi (hi)</option>
+          </select>
+        </label>
+        <label style="display:flex; gap:8px; align-items:center;">
+          <input type="checkbox" id="stream-audio" />
+          Stream mic audio in real time
+        </label>
+        <label style="display:flex; gap:8px; align-items:center;">
+          <input type="checkbox" id="increase-resolution" />
+          Increase video resolution
+        </label>
+      </div>
+
+      <div class="content">
+        <div class="left">
+          <div id="chat" class="chat" style="display: flex; flex-direction: column;"></div>
+          <div class="row">
+            <input id="text" type="text" placeholder="Type your message and press Send" />
+            <button id="send">Send</button>
+            <button id="ptt" title="Hold to talk">🎙️ Hold to talk</button>
+          </div>
+        </div>
+        <div class="right">
+          <div id="livekitContainer"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const $chat = document.getElementById('chat');
+      const $text = document.getElementById('text');
+      const $send = document.getElementById('send');
+      const $ptt = document.getElementById('ptt');
+      const $selAvatar = document.getElementById('sel-avatar');
+      const $selEmotion = document.getElementById('sel-emotion');
+      const $selLanguage = document.getElementById('sel-language');
+      const $increase = document.getElementById('increase-resolution');
+
+      let sessionId = null;
+      let lkRoom = null;
+
+      function addMsg(role, content) {
+        const div = document.createElement('div');
+        div.className = `msg ${role}`;
+        div.textContent = content;
+        $chat.appendChild(div);
+        $chat.scrollTop = $chat.scrollHeight;
+      }
+      const history = [];
+
+      function removeKind(container, kind) {
+        for (const el of Array.from(container.children)) {
+          if (el.tagName && el.tagName.toLowerCase() === kind) {
+            container.removeChild(el);
+          }
+        }
+      }
+      function clearLivekitContainer() {
+        const c = document.getElementById('livekitContainer');
+        if (c) c.replaceChildren();
+      }
+      async function joinLiveKit() {
+        const resp = await fetch('/session', { method: 'POST' });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || 'Failed to create session');
+        sessionId = data.session_id;
+        const token = data.token;
+        const url = data.livekit_url;
+        lkRoom = new LivekitClient.Room();
+        await lkRoom.connect(url, token);
+        lkRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+          const c = document.getElementById('livekitContainer');
+          if (!c) return;
+          // Replace previous of the same kind to avoid stacking
+          if (track.kind === 'video') removeKind(c, 'video');
+          if (track.kind === 'audio') removeKind(c, 'audio');
+          const el = track.attach();
+          el.setAttribute('playsinline', 'true');
+          el.style.width = '100%';
+          el.style.height = '100%';
+          el.style.objectFit = 'cover';
+          c.appendChild(el);
+        });
+        lkRoom.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track) => {
+          track.detach().forEach(el => el.remove());
+        });
+      }
+
+      async function send() {
+        const text = $text.value.trim();
+        if (!text || !sessionId) return;
+        $text.value = '';
+        addMsg('user', text);
+        history.push({ role: 'user', content: text });
+        $send.disabled = true;
+        try {
+          // Clear previous media before requesting a new avatar response
+          clearLivekitContainer();
+          const resp = await fetch('/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              session_id: sessionId,
+              user_text: text, history,
+              avatar: $selAvatar.value,
+              emotion: $selEmotion.value,
+              language: $selLanguage.value,
+              increase_resolution: $increase.checked,
+            })
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || 'Request failed');
+          const assistant = data.assistant_text || '';
+          addMsg('assistant', assistant);
+          history.push({ role: 'assistant', content: assistant });
+        } catch (err) {
+          addMsg('assistant', `Error: ${err.message || err}`);
+        } finally {
+          $send.disabled = false;
+        }
+      }
+      $send.addEventListener('click', send);
+      $text.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+
+      // Push-to-talk using /transcribe, then /chat
+      let mediaRecorder = null; let chunks = []; let micStream = null; let audioWS = null;
+      function wsScheme() { return location.protocol === 'https:' ? 'wss:' : 'ws:'; }
+
+      async function startRecording() {
+        try {
+          micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          chunks = [];
+          const preferred = 'audio/webm';
+          const opts = MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(preferred) ? { mimeType: preferred } : undefined;
+          mediaRecorder = new MediaRecorder(micStream, opts);
+          mediaRecorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+          mediaRecorder.onstop = async () => {
+            try {
+              if (document.getElementById('stream-audio').checked) {
+                // Close audio WS if open
+                try { if (audioWS && audioWS.readyState === WebSocket.OPEN) audioWS.close(); } catch {}
+              } else {
+                const blobType = mediaRecorder.mimeType || 'audio/webm';
+                const blob = new Blob(chunks, { type: blobType });
+                const form = new FormData();
+                const ext = blobType.includes('webm') ? 'webm' : (blobType.includes('mp4') ? 'm4a' : 'ogg');
+                form.append('audio', blob, `ptt.${ext}`);
+                if (!sessionId) throw new Error('No session');
+                // First transcribe
+                const tr = await fetch('/transcribe', { method: 'POST', body: form });
+                const trData = await tr.json();
+                if (!tr.ok) throw new Error(trData.error || 'Transcription failed');
+                const userText = trData.user_text || '(unrecognized speech)';
+                addMsg('user', userText);
+                history.push({ role: 'user', content: userText });
+                // Then chat which triggers LiveKit avatar speech
+                const resp = await fetch('/chat', {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    session_id: sessionId,
+                    user_text: userText, history,
+                    avatar: $selAvatar.value,
+                    emotion: $selEmotion.value,
+                    language: $selLanguage.value,
+                    increase_resolution: $increase.checked,
+                  })
+                });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.error || 'Voice request failed');
+                const assistant = data.assistant_text || '';
+                addMsg('assistant', assistant);
+                history.push({ role: 'assistant', content: assistant });
+              }
+            } catch (err) {
+              addMsg('assistant', `Voice error: ${err.message || err}`);
+            } finally {
+              $ptt.disabled = false;
+            }
+          };
+          if (document.getElementById('stream-audio').checked) {
+            // Open WS relay and stream chunks
+            if (!sessionId) throw new Error('No session');
+            const params = new URLSearchParams({
+              session_id: sessionId,
+              avatar: $selAvatar.value,
+              emotion: $selEmotion.value,
+              language: $selLanguage.value,
+              increase_resolution: String($increase.checked),
+            });
+            const url = `${wsScheme()}//${location.host}/ws/audio?${params.toString()}`;
+            clearLivekitContainer();
+            audioWS = new WebSocket(url);
+            audioWS.binaryType = 'arraybuffer';
+            audioWS.onopen = () => {
+              mediaRecorder.start(250);
+            };
+            audioWS.onerror = (e) => {
+              addMsg('assistant', `Audio WS error`);
+            };
+            audioWS.onclose = () => {
+              // no-op
+            };
+            mediaRecorder.ondataavailable = async (e) => {
+              if (e.data && e.data.size && audioWS && audioWS.readyState === WebSocket.OPEN) {
+                try {
+                  const buf = await e.data.arrayBuffer();
+                  audioWS.send(buf);
+                } catch {}
+              }
+            };
+          } else {
+            mediaRecorder.start();
+          }
+          $ptt.textContent = '● Recording...';
+          $ptt.style.background = '#8a1b1b';
+        } catch (err) {
+          addMsg('assistant', `Mic error: ${err.message || err}`);
+        }
+      }
+      function stopRecording() {
+        try {
+          if (mediaRecorder && mediaRecorder.state !== 'inactive') { mediaRecorder.stop(); }
+          if (audioWS && audioWS.readyState === WebSocket.OPEN) { audioWS.close(); }
+        }
+        finally {
+          if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+          $ptt.textContent = '🎙️ Hold to talk';
+          $ptt.style.background = '';
+        }
+      }
+      $ptt.addEventListener('mousedown', (e) => { e.preventDefault(); startRecording(); });
+      $ptt.addEventListener('touchstart', (e) => { e.preventDefault(); startRecording(); });
+      const stopEvents = ['mouseup', 'mouseleave', 'touchend', 'touchcancel'];
+      stopEvents.forEach(ev => $ptt.addEventListener(ev, (e) => { e.preventDefault(); stopRecording(); }));
+
+      // Initialize
+      joinLiveKit().catch(err => addMsg('assistant', `Setup error: ${err.message || err}`));
+    </script>
+  </body>
+  </html>
