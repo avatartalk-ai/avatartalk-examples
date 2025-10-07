@@ -27,7 +27,7 @@ from livestream.youtube import YouTubeCommentManager
 logger = logging.getLogger(__name__)
 
 
-class AvatarTalkTeacher:
+class AvatarTalkStreamer:
     """
     Coordinates topic selection, text generation, and streaming.
 
@@ -35,7 +35,7 @@ class AvatarTalkTeacher:
     segments using the OpenAI API, and streams them via AvatarTalk.
     """
 
-    def __init__(self, live_id: str):
+    def __init__(self, live_id: str, background_url: str | None = None):
         self.client = self._init_openai_client()
         self.model = AVATARTALK_MODEL
         self.topics_file = AVATARTALK_TOPICS_FILE
@@ -57,6 +57,7 @@ class AvatarTalkTeacher:
             AVATARTALK_LANGUAGE,
             YOUTUBE_RTMP_URL,
             YOUTUBE_STREAM_KEY,
+            background_url
         )
 
         # System prompt

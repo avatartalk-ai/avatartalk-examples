@@ -7,7 +7,7 @@ import logging
 import sys
 
 from livestream.config import YOUTUBE_LIVE_ID
-from livestream.core import AvatarTalkTeacher
+from livestream.core import AvatarTalkStreamer
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -18,6 +18,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="YouTube Live video ID. Falls back to $YOUTUBE_LIVE_ID if omitted.",
     )
+    parser.add_argument("--background-url", type=str, default=None, help="Background image URL")
     parser.add_argument(
         "--log-level",
         default="INFO",
@@ -42,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    streamer = AvatarTalkTeacher(video_id)
+    streamer = AvatarTalkStreamer(video_id, args.background_url)
     streamer.run()
     return 0
 
