@@ -15,6 +15,7 @@ AVATARTALK_URL = os.getenv("AVATARTALK_URL")
 AVATARTALK_API_KEY = os.getenv("AVATARTALK_API_KEY")
 AVATARTALK_AVATAR = os.getenv("AVATARTALK_AVATAR")
 AVATARTALK_LANGUAGE = os.getenv("AVATARTALK_LANGUAGE", "en")
+AVATARTALK_DEFAULT_BACKGROUND_URL = "https://avatartalk.ai/images/backgrounds/feng_shui_1.png"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # Teacher setup

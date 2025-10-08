@@ -8,17 +8,18 @@ import { YouTubeCommentManager } from './youtube.js';
 import { Logger } from './logger.js';
 
 export class AvatarTalkTeacher {
-  constructor(liveId, { logLevel = 'INFO' } = {}) {
+  constructor(liveId, backgroundUrl = config.avatartalk_default_background_url, { logLevel = 'INFO' } = {}) {
     this.logger = new Logger(logLevel);
     this.client = new OpenAI({ apiKey: config.openai_api_key });
     this.model = config.avatartalk_model;
     this.topicsFile = config.topics_file;
     this.shutdownRequested = false;
     this.youtubeLiveId = liveId || config.youtube_live_id || null;
+    this.backgroundUrl = backgroundUrl || config.avatartalk_default_background_url;
     this.remainingDurationToPlay = 10; // seconds
     this.contextHistory = [];
     this.topics = [];
-    this.avatartalkConnector = new AvatarTalkConnector({ logger: this.logger });
+    this.avatartalkConnector = new AvatarTalkConnector({ backgroundUrl: this.backgroundUrl, logger: this.logger });
     this.youtubeManager = null;
 
     this.systemPrompt = `You are "AvatarTalk Teacher", a friendly English coach streaming live 24/7.

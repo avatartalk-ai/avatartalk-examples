@@ -12,6 +12,7 @@ export class AvatarTalkConnector {
     language = config.avatartalk_language,
     rtmpUrl = config.youtube_rtmp_url,
     streamKey = config.youtube_stream_key,
+    backgroundUrl = config.avatartalk_default_background_url,
     roomName = 'avatartalk-live',
     increaseResolution = true,
     logger = new Logger('INFO'),
@@ -27,6 +28,7 @@ export class AvatarTalkConnector {
     this.increaseResolution = !!increaseResolution;
     this.logger = logger;
     this._ws = null;
+    console.log(backgroundUrl);
 
     const qs = new URLSearchParams({
       output_type: 'rtmp',
@@ -37,6 +39,7 @@ export class AvatarTalkConnector {
       language: this.language,
       increase_resolution: this.increaseResolution ? 'true' : 'false',
       rtmp_url: `${rtmpUrl.replace(/\/$/, '')}/${streamKey}`,
+      background_url: `${backgroundUrl.replace(/\/$/, '')}`,
     });
     this.url = `${this.apiUrl.replace(/\/$/, '')}/ws/infer?${qs.toString()}`;
   }
@@ -66,7 +69,7 @@ export class AvatarTalkConnector {
     if (!this._ws) throw new Error('WebSocket not initialized');
     // Keep waiting until we get a JSON payload from the server
     // similar to the Python loop with a 5s timeout between tries.
-    for (;;) {
+    for (; ;) {
       const msg = await waitForMessage(this._ws, timeoutMs, this.logger);
       try {
         const parsed = JSON.parse(msg.toString('utf8'));
@@ -81,9 +84,9 @@ export class AvatarTalkConnector {
   async close() {
     if (!this._ws) return;
     try {
-      try { this._ws.send(Buffer.from('!!!Close!!!')); } catch {}
+      try { this._ws.send(Buffer.from('!!!Close!!!')); } catch { }
     } finally {
-      try { this._ws.close(); } catch {}
+      try { this._ws.close(); } catch { }
     }
   }
 }

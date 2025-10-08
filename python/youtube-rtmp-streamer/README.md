@@ -55,6 +55,40 @@ AVATARTALK_TOPICS_FILE=topics.txt
 
 The generated speaking segment is printed to stdout (handy for piping/testing). Operational logs go to stderr. Press Ctrl+C to stop gracefully.
 
+## Backgrounds
+
+Here's the list of available backgrounds provided by AvatarTalk.ai:
+- https://avatartalk.ai/images/backgrounds/feng_shui_1.png (default)
+- https://avatartalk.ai/images/backgrounds/feng_shui_2.png
+- https://avatartalk.ai/images/backgrounds/feng_shui_3.png
+- https://avatartalk.ai/images/backgrounds/feng_shui_4.png
+- https://avatartalk.ai/images/backgrounds/feng_shui_5.png
+- https://avatartalk.ai/images/backgrounds/dance_hall_1.png
+- https://avatartalk.ai/images/backgrounds/dance_hall_2.png
+- https://avatartalk.ai/images/backgrounds/dance_hall_3.png
+- https://avatartalk.ai/images/backgrounds/dance_hall_4.png
+- https://avatartalk.ai/images/backgrounds/dance_hall_5.png
+- https://avatartalk.ai/images/backgrounds/gym_1.png
+- https://avatartalk.ai/images/backgrounds/gym_2.png
+- https://avatartalk.ai/images/backgrounds/gym_3.png
+- https://avatartalk.ai/images/backgrounds/gym_4.png
+- https://avatartalk.ai/images/backgrounds/gym_5.png
+- https://avatartalk.ai/images/backgrounds/kitchen_1.png
+- https://avatartalk.ai/images/backgrounds/kitchen_2.png
+- https://avatartalk.ai/images/backgrounds/kitchen_3.png
+- https://avatartalk.ai/images/backgrounds/kitchen_4.png
+- https://avatartalk.ai/images/backgrounds/kitchen_5.png
+- https://avatartalk.ai/images/backgrounds/template_1.png
+- https://avatartalk.ai/images/backgrounds/template_2.png
+- https://avatartalk.ai/images/backgrounds/template_3.png
+- https://avatartalk.ai/images/backgrounds/template_4.png
+- https://avatartalk.ai/images/backgrounds/template_5.png
+- https://avatartalk.ai/images/backgrounds/temple_1.png
+- https://avatartalk.ai/images/backgrounds/temple_2.png
+- https://avatartalk.ai/images/backgrounds/temple_3.png
+- https://avatartalk.ai/images/backgrounds/temple_4.png
+- https://avatartalk.ai/images/backgrounds/temple_5.png
+
 ## CLI Options
 - `video_id` (positional, optional): YouTube Live video ID. Falls back to `YOUTUBE_LIVE_ID`.
 - `--background-url`: HTTPS URL for a background image in the RTMP stream.
@@ -65,7 +99,6 @@ The generated speaking segment is printed to stdout (handy for piping/testing). 
 - Chooses a topic from chat summary or randomly from `topics.txt`.
 - Generates a 60–90 word monologue with OpenAI.
 - Sends it to the AvatarTalk WebSocket RTMP gateway, which renders the avatar and streams to YouTube.
-- Uses a simple cooldown so segments don’t overlap while audio is playing.
 
 ## Troubleshooting
 - “YOUTUBE_API_KEY not provided”: Set `YOUTUBE_API_KEY` and ensure YouTube Data API v3 is enabled.

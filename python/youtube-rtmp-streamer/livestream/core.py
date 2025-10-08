@@ -14,6 +14,7 @@ from livestream.avatartalk import AvatarTalkConnector
 from livestream.config import (
     AVATARTALK_API_KEY,
     AVATARTALK_AVATAR,
+    AVATARTALK_DEFAULT_BACKGROUND_URL,
     AVATARTALK_LANGUAGE,
     AVATARTALK_MODEL,
     AVATARTALK_TOPICS_FILE,
@@ -57,7 +58,7 @@ class AvatarTalkStreamer:
             AVATARTALK_LANGUAGE,
             YOUTUBE_RTMP_URL,
             YOUTUBE_STREAM_KEY,
-            background_url
+            background_url or AVATARTALK_DEFAULT_BACKGROUND_URL,
         )
 
         # System prompt

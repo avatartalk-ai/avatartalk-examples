@@ -13,6 +13,7 @@ export const config = Object.freeze({
   avatartalk_api_key: getEnv('AVATARTALK_API_KEY'),
   avatartalk_avatar: getEnv('AVATARTALK_AVATAR', 'european_woman'),
   avatartalk_language: getEnv('AVATARTALK_LANGUAGE', 'en'),
+  avatartalk_default_background_url: 'https://avatartalk.ai/images/backgrounds/feng_shui_1.png',
 
   // YouTube Data API + RTMP ingest
   youtube_api_key: getEnv('YOUTUBE_API_KEY'),

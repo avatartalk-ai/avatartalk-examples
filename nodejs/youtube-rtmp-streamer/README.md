@@ -26,11 +26,45 @@ Optional:
 - `AVATARTALK_MODEL` (defaults to `gpt-4o-mini`)
 
 ## Run
-- With CLI argument: `node src/main.js <VIDEO_ID>`
+- With CLI argument: `node src/main.js -- <VIDEO_ID> --background-url <BACKGROUND_URL>`
 - Using env fallback: set `YOUTUBE_LIVE_ID` and run `node src/main.js`
 - Control logging: `--log-level DEBUG|INFO|WARNING|ERROR|CRITICAL` (default: INFO)
 
 The generated speaking segment is printed to stdout (for TTS/pipe usage). Operational logs go to stderr.
+
+## Backgrounds
+
+Here's the list of available backgrounds provided by AvatarTalk.ai:
+- https://avatartalk.ai/images/backgrounds/feng_shui_1.png (default)
+- https://avatartalk.ai/images/backgrounds/feng_shui_2.png
+- https://avatartalk.ai/images/backgrounds/feng_shui_3.png
+- https://avatartalk.ai/images/backgrounds/feng_shui_4.png
+- https://avatartalk.ai/images/backgrounds/feng_shui_5.png
+- https://avatartalk.ai/images/backgrounds/dance_hall_1.png
+- https://avatartalk.ai/images/backgrounds/dance_hall_2.png
+- https://avatartalk.ai/images/backgrounds/dance_hall_3.png
+- https://avatartalk.ai/images/backgrounds/dance_hall_4.png
+- https://avatartalk.ai/images/backgrounds/dance_hall_5.png
+- https://avatartalk.ai/images/backgrounds/gym_1.png
+- https://avatartalk.ai/images/backgrounds/gym_2.png
+- https://avatartalk.ai/images/backgrounds/gym_3.png
+- https://avatartalk.ai/images/backgrounds/gym_4.png
+- https://avatartalk.ai/images/backgrounds/gym_5.png
+- https://avatartalk.ai/images/backgrounds/kitchen_1.png
+- https://avatartalk.ai/images/backgrounds/kitchen_2.png
+- https://avatartalk.ai/images/backgrounds/kitchen_3.png
+- https://avatartalk.ai/images/backgrounds/kitchen_4.png
+- https://avatartalk.ai/images/backgrounds/kitchen_5.png
+- https://avatartalk.ai/images/backgrounds/template_1.png
+- https://avatartalk.ai/images/backgrounds/template_2.png
+- https://avatartalk.ai/images/backgrounds/template_3.png
+- https://avatartalk.ai/images/backgrounds/template_4.png
+- https://avatartalk.ai/images/backgrounds/template_5.png
+- https://avatartalk.ai/images/backgrounds/temple_1.png
+- https://avatartalk.ai/images/backgrounds/temple_2.png
+- https://avatartalk.ai/images/backgrounds/temple_3.png
+- https://avatartalk.ai/images/backgrounds/temple_4.png
+- https://avatartalk.ai/images/backgrounds/temple_5.png
 
 ## How it works
 - YouTube Data API is used to fetch recent live chat messages.
