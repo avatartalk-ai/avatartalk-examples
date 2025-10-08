@@ -27,13 +27,11 @@ function parseArgs(argv) {
     .version(false)
     .strict(false);
   const parsed = y.parseSync();
-  console.log(`Parsed: ${JSON.stringify(parsed)}`)
   return { videoId: parsed._[0] || parsed.video_id || null, backgroundUrl: parsed['background-url'] || null, logLevel: parsed['log-level'] };
 }
 
 async function main(argv) {
   const { videoId, backgroundUrl, logLevel } = parseArgs(argv);
-  console.log(`Parsed bg URL: ${backgroundUrl}`);
   const vid = videoId || process.env.YOUTUBE_LIVE_ID;
   if (!vid) {
     console.error('Error: no video ID provided. Pass it as an argument or set $YOUTUBE_LIVE_ID.');

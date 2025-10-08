@@ -28,7 +28,6 @@ export class AvatarTalkConnector {
     this.increaseResolution = !!increaseResolution;
     this.logger = logger;
     this._ws = null;
-    console.log(backgroundUrl);
 
     const qs = new URLSearchParams({
       output_type: 'rtmp',
