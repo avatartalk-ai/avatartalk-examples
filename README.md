@@ -2,6 +2,8 @@
 
 Example integrations with AvatarTalk.ai’s REST API for generating talking avatar videos from text. This repo includes Node.js and Python examples for regular (JSON), streaming (binary MP4), and LiveKit.
 
+A live demo of the examples is available at https://demo.avatartalk.ai/.
+
 Full documentation of AvatarTalk.ai API is available in [API.md](/API.md).
 
 ## Directories
