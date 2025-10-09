@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 import json
 import uuid
 from pathlib import Path
@@ -11,12 +11,11 @@ import requests
 from fastapi import FastAPI, Request, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
-from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .data import KnowledgeBase
 from .openai_client import chat_complete, transcribe_audio_bytes
-from .avatartalk_client import inference, AvatarTalkError
+from .avatartalk_client import inference
 
 
 TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "templates"
@@ -26,20 +25,25 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 pending_streams: Dict[str, Dict[str, Any]] = {}
 STREAM_TTL = timedelta(minutes=10)
 
-async def lifespan(app) -> None:
 
+async def lifespan(app) -> None:
     async def janitor() -> None:
         while True:
             await asyncio.sleep(60)
             now = datetime.now(timezone.utc)
-            expired = [sid for sid, info in list(pending_streams.items())
-                       if info.get("expires_at") and info["expires_at"] < now]
+            expired = [
+                sid
+                for sid, info in list(pending_streams.items())
+                if info.get("expires_at") and info["expires_at"] < now
+            ]
             for sid in expired:
                 pending_streams.pop(sid, None)
 
     # store task to cancel on shutdown
     app.state.knowledge_base = KnowledgeBase()
-    app.state.knowledge_base.create_and_initialize_vector_store(settings.vector_store_name, settings.knowledge_base_directory_path)
+    app.state.knowledge_base.create_and_initialize_vector_store(
+        settings.vector_store_name, settings.knowledge_base_directory_path
+    )
     app.state._janitor_task = asyncio.create_task(janitor())
 
     yield
@@ -50,7 +54,9 @@ async def lifespan(app) -> None:
     if task:
         task.cancel()
 
+
 app = FastAPI(title="AvatarTalk - Knowledge-powered chat", lifespan=lifespan)
+
 
 @app.get("/healthz")
 def healthz() -> Dict[str, str]:
@@ -90,7 +96,9 @@ async def chat(request: Request, payload: Dict[str, Any]) -> JSONResponse:
             messages.append({"role": msg["role"], "content": msg["content"]})
     messages.append({"role": "user", "content": user_text})
 
-    assistant_text = chat_complete(messages, request.app.state.knowledge_base.vector_store_id)
+    assistant_text = chat_complete(
+        messages, request.app.state.knowledge_base.vector_store_id
+    )
 
     # Optional overrides from payload
     avatar = (payload or {}).get("avatar") or None
@@ -110,14 +118,17 @@ async def chat(request: Request, payload: Dict[str, Any]) -> JSONResponse:
         # Return error but keep assistant_text
         at_json = {"status": "error", "message": str(e)}
 
-    return JSONResponse({
-        "assistant_text": assistant_text,
-        "inference": at_json,
-    })
+    return JSONResponse(
+        {
+            "assistant_text": assistant_text,
+            "inference": at_json,
+        }
+    )
 
 
 @app.post("/voice", response_class=JSONResponse)
 async def voice(
+    request: Request,
     audio: UploadFile = File(...),
     history: str | None = Form(None),
 ) -> JSONResponse:
@@ -131,18 +142,24 @@ async def voice(
             try:
                 parsed = json.loads(history)
                 for msg in parsed or []:
-                    if msg.get("role") in {"system", "user", "assistant"} and msg.get("content"):
+                    if msg.get("role") in {"system", "user", "assistant"} and msg.get(
+                        "content"
+                    ):
                         msgs.append({"role": msg["role"], "content": msg["content"]})
             except Exception:
                 pass
 
         # Transcribe with OpenAI
-        user_text = transcribe_audio_bytes(data, filename=audio.filename or "audio.webm")
+        user_text = transcribe_audio_bytes(
+            data, filename=audio.filename or "audio.webm"
+        )
         if not user_text:
             return JSONResponse({"error": "transcription failed"}, status_code=500)
 
         msgs.append({"role": "user", "content": user_text})
-        assistant_text = chat_complete(msgs)
+        assistant_text = chat_complete(
+            msgs, request.app.state.knowledge_base.vector_store_id
+        )
 
         # Generate video via AvatarTalk
         at_json: Dict[str, Any] = {}
@@ -151,11 +168,13 @@ async def voice(
         except Exception as e:
             at_json = {"status": "error", "message": str(e)}
 
-        return JSONResponse({
-            "user_text": user_text,
-            "assistant_text": assistant_text,
-            "inference": at_json,
-        })
+        return JSONResponse(
+            {
+                "user_text": user_text,
+                "assistant_text": assistant_text,
+                "inference": at_json,
+            }
+        )
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
@@ -173,7 +192,7 @@ async def transcribe(audio: UploadFile = File(...)) -> JSONResponse:
 
 
 @app.post("/chat_stream", response_class=JSONResponse)
-async def chat_stream(payload: Dict[str, Any]) -> JSONResponse:
+async def chat_stream(request: Request, payload: Dict[str, Any]) -> JSONResponse:
     """
     Initialize a streaming video generation for assistant's reply.
     Returns assistant_text and a stream_url to fetch the MP4 stream.
@@ -189,7 +208,9 @@ async def chat_stream(payload: Dict[str, Any]) -> JSONResponse:
             messages.append({"role": msg["role"], "content": msg["content"]})
     messages.append({"role": "user", "content": user_text})
 
-    assistant_text = chat_complete(messages)
+    assistant_text = chat_complete(
+        messages, request.app.state.knowledge_base.vector_store_id
+    )
 
     # Optional overrides from payload
     avatar = (payload or {}).get("avatar") or settings.avatar
@@ -204,11 +225,13 @@ async def chat_stream(payload: Dict[str, Any]) -> JSONResponse:
         "language": language,
         "expires_at": datetime.now(timezone.utc) + STREAM_TTL,
     }
-    return JSONResponse({
-        "assistant_text": assistant_text,
-        "stream_id": sid,
-        "stream_url": f"/stream/{sid}.mp4",
-    })
+    return JSONResponse(
+        {
+            "assistant_text": assistant_text,
+            "stream_id": sid,
+            "stream_url": f"/stream/{sid}.mp4",
+        }
+    )
 
 
 @app.get("/stream/{sid}.mp4")
@@ -235,7 +258,9 @@ def stream_video(sid: str):
     }
 
     def gen():
-        with requests.post(url, json=payload, headers=headers, stream=True, timeout=None) as resp:
+        with requests.post(
+            url, json=payload, headers=headers, stream=True, timeout=None
+        ) as resp:
             resp.raise_for_status()
             for chunk in resp.iter_content(chunk_size=16384):
                 if chunk:
