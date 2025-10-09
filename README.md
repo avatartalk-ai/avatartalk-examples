@@ -16,9 +16,11 @@ Full documentation of AvatarTalk.ai API is available in [API.md](/API.md).
 - `python/livekit-webchat` – LiveKit-based webchat: assistant replies are spoken by an avatar into a LiveKit room via `/ws/infer`.
 - `python/livekit-agents` – LiveKit Agents integration.
 - `python/youtube-rtmp-streamer` – Generates short English‑learning segments with OpenAI and streams them to a YouTube Live RTMP endpoint via AvatarTalk; can read live chat and adapt topics.
+- `python/knowledge-base` – Knowledge-grounded chat that builds an OpenAI vector store from local files and uses `file_search` to ground answers before rendering an avatar video.
 - `nodejs/simple-webchat` – Feature-parity Node.js port (Express) of the text-first app, including voice input and streaming proxy.
 - `nodejs/livekit-webchat` – Node.js LiveKit webchat where the assistant speaks into a LiveKit room via `/ws/infer`.
 - `nodejs/youtube-rtmp-streamer` – Node.js RTMP streamer; same behavior as the Python version, streams to YouTube and adapts to live chat.
+- `nodejs/knowledge-base` – Knowledge-grounded chat that builds an OpenAI vector store from local files and uses `file_search` to ground answers before rendering an avatar video.
 
 ## Key Endpoints
 
@@ -83,3 +85,17 @@ Full documentation of AvatarTalk.ai API is available in [API.md](/API.md).
   - Copy env: `cp .env.example .env`, then set: `OPENAI_API_KEY`, `AVATARTALK_API_KEY`, `YOUTUBE_API_KEY`, `YOUTUBE_RTMP_URL`, `YOUTUBE_STREAM_KEY` (optional: `YOUTUBE_LIVE_ID`)
   - In the folder: `npm install`
   - Run: `node src/main.js <VIDEO_ID>` or set `YOUTUBE_LIVE_ID` and run `node src/main.js`
+
+- Python app (`python/knowledge-base`)
+  - Requirements: `python>=3.10`, `uv`
+  - Create `.env` with `OPENAI_API_KEY` and `AVATARTALK_API_KEY`
+  - Place files in `data/` (or set `KNOWLEDGE_BASE_DIRECTORY_PATH`)
+  - Run: `uv run knowledge-base`
+  - Open `http://127.0.0.1:8000`
+
+- Node.js app (`nodejs/knowledge-base`)
+  - Requirements: `node>=18`
+  - Copy env: `cp .env.example .env`, then set `OPENAI_API_KEY` and `AVATARTALK_API_KEY`
+  - Place files in `data/` (or set `KNOWLEDGE_BASE_DIRECTORY_PATH`)
+  - In the folder: `npm install` then `npm start`
+  - Open `http://127.0.0.1:8000`
