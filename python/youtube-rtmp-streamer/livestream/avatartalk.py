@@ -12,7 +12,16 @@ logger = logging.getLogger(__name__)
 class AvatarTalkConnector:
     """Thin wrapper around the AvatarTalk WebSocket/RTMP gateway."""
 
-    def __init__(self, url: str, api_key: str, avatar: str, language: str, rtmp_url: str, stream_key: str, background_url: str | None = None):
+    def __init__(
+        self,
+        url: str,
+        api_key: str,
+        avatar: str,
+        language: str,
+        rtmp_url: str,
+        stream_key: str,
+        background_url: str | None = None,
+    ):
         self.avatar = avatar
         self.emotion = "neutral"
         self.language = language
@@ -38,7 +47,7 @@ class AvatarTalkConnector:
         self._ws: websockets.ClientConnection | None = None
 
     async def initialize(self) -> None:
-        self._ws = await websockets.connect(self.url, additional_headers={"X-API-Key": self.api_key})
+        self._ws = await websockets.connect(self.url, additional_headers={"Authorization": f"Bearer {self.api_key}"})
 
     async def send(self, text_content: str) -> None:
         try:

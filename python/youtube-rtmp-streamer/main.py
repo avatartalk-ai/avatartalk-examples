@@ -19,6 +19,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="YouTube Live video ID. Falls back to $YOUTUBE_LIVE_ID if omitted.",
     )
     parser.add_argument("--background-url", type=str, default=None, help="Background image URL")
+    parser.add_argument("--language", type=str, default="en", help="Language to use in stream")
     parser.add_argument(
         "--log-level",
         default="INFO",
@@ -43,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    streamer = AvatarTalkStreamer(video_id, args.background_url)
+    streamer = AvatarTalkStreamer(video_id, args.language, args.background_url)
     streamer.run()
     return 0
 

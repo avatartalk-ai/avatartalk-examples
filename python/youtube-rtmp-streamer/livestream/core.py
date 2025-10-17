@@ -15,8 +15,8 @@ from livestream.config import (
     AVATARTALK_API_KEY,
     AVATARTALK_AVATAR,
     AVATARTALK_DEFAULT_BACKGROUND_URL,
-    AVATARTALK_LANGUAGE,
     AVATARTALK_MODEL,
+    AVATARTALK_PROMPT_PATH,
     AVATARTALK_TOPICS_FILE,
     AVATARTALK_URL,
     YOUTUBE_API_KEY,
@@ -36,15 +36,17 @@ class AvatarTalkStreamer:
     segments using the OpenAI API, and streams them via AvatarTalk.
     """
 
-    def __init__(self, live_id: str, background_url: str | None = None):
+    def __init__(self, live_id: str, language: str, background_url: str | None = None):
         self.client = self._init_openai_client()
         self.model = AVATARTALK_MODEL
         self.topics_file = AVATARTALK_TOPICS_FILE
         self.shutdown_requested = False
         self.room_name = "avatartalk-live"
         self.youtube_live_id = live_id
+        self.stream_language = language
         # Cooldown to avoid overlapping segments while previous audio plays
         self.remaining_duration_to_play = 10
+        self.prompt_path = AVATARTALK_PROMPT_PATH
 
         # Rolling context - keep last 2 assistant messages
         self.context_history: list[dict] = []
@@ -55,24 +57,15 @@ class AvatarTalkStreamer:
             AVATARTALK_URL,
             AVATARTALK_API_KEY,
             AVATARTALK_AVATAR,
-            AVATARTALK_LANGUAGE,
+            self.stream_language,
             YOUTUBE_RTMP_URL,
             YOUTUBE_STREAM_KEY,
             background_url or AVATARTALK_DEFAULT_BACKGROUND_URL,
         )
 
         # System prompt
-        self.system_prompt = """You are "AvatarTalk Teacher", a friendly English coach streaming live 24/7.
-Your job is to produce short, engaging monologue segments about learning and using English.
-Rules:
-- Keep each segment ~60–90 English words (20–40 seconds when spoken).
-- Use clear B1–B2 vocabulary.
-- Structure: hook (1 sentence) → tip (1–2 sentences) → concrete example (1–2 sentences) → tiny task for the viewer (1 sentence) → end with a brief question inviting chat replies.
-- Focus on practical topics: pronunciation, connected speech, phrasal verbs, politeness, travel scenarios, café/small talk, creators & small business use-cases.
-- Avoid controversy and sensitive topics.
-- Do not greet or introduce yourself every time; continue naturally.
-- Never ask the user to type commands; just speak the content.
-Return plain text only, no markdown."""
+        with open(self.prompt_path) as f:
+            self.system_prompt = f.read()
 
         # Set up YouTube comment manager
         youtube_api_key = YOUTUBE_API_KEY
@@ -219,6 +212,10 @@ Return plain text only, no markdown."""
 
                     # Generate segment
                     segment = self._generate_segment(topic)
+
+                    if comments:
+                        self.youtube_manager.send_chat_message(segment)
+
                     text_gen_duration = time.time() - start_comment_processing
 
                     if not segment:

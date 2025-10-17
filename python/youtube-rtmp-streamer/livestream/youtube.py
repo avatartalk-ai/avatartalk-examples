@@ -1,14 +1,29 @@
 import logging
 import sys
+import time
 from datetime import UTC, datetime
 from typing import Any
 
+import google_auth_oauthlib.flow
+import googleapiclient.discovery
+import googleapiclient.errors
+import nltk
 import requests
+from googleapiclient.errors import HttpError
+from nltk.tokenize import sent_tokenize
 from openai import OpenAI
 
-from livestream.config import AVATARTALK_MODEL
+from livestream.config import AVATARTALK_MODEL, GOOGLE_CLIENT_SECRETS_PATH
 
 logger = logging.getLogger(__name__)
+
+SCOPES = ["https://www.googleapis.com/auth/youtube", "https://www.googleapis.com/auth/youtube.force-ssl"]
+
+API_SERVICE_NAME = "youtube"
+API_VERSION = "v3"
+
+nltk.download("punkt")
+nltk.download("punkt_tab")
 
 
 class YouTubeCommentManager:
@@ -26,6 +41,14 @@ class YouTubeCommentManager:
             "You are a helpful assistant that summarizes YouTube Live chat comments. "
             "Summarize the comments in a single sentence."
         )
+        self.secrets_path = GOOGLE_CLIENT_SECRETS_PATH
+
+        if not self.secrets_path:
+            raise ValueError("GOOGLE_CLIENT_SECRETS_PATH not set!")
+
+        flow = google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file(self.secrets_path, SCOPES)
+        credentials = flow.run_local_server(port=0)
+        self.youtube = googleapiclient.discovery.build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
 
     def find_live_stream(self, channel_name: str = "avatartalk") -> str | None:
         """Find the current live stream ID for the given channel."""
@@ -63,16 +86,10 @@ class YouTubeCommentManager:
     def _get_channel_id(self, channel_name: str) -> str | None:
         """Get channel ID from channel name."""
         try:
-            search_url = f"{self.base_url}/search"
-            params = {"part": "snippet", "q": channel_name, "type": "channel", "key": self.api_key}
+            request = self.youtube.channels().list(part="snippet,contentDetails,statistics", mine=True)
 
-            response = requests.get(search_url, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-
-            if data.get("items"):
-                return data["items"][0]["id"]["channelId"]
-            return None
+            response = request.execute()
+            return response["items"][0]["id"]
 
         except Exception as e:
             logger.exception("Error getting channel ID: %s", e)
@@ -131,7 +148,7 @@ class YouTubeCommentManager:
                 # Parse timestamp
                 published_at = datetime.fromisoformat(snippet["publishedAt"]).replace(tzinfo=UTC)
 
-                if published_at > self.last_check_time:
+                if published_at > self.last_check_time and not author["isChatOwner"]:
                     details = snippet.get("textMessageDetails") or {}
                     text = details.get("messageText", "")
                     comments.append(
@@ -167,3 +184,53 @@ class YouTubeCommentManager:
         except Exception as e:
             logger.exception("OpenAI API error: %s", e)
             raise
+
+    def send_chat_message(self, message):
+        """
+        Send a message to a live stream chat
+
+        Args:
+            youtube: Authenticated YouTube API service
+            live_chat_id: The live chat ID (get from broadcast)
+            message: The message text to send
+
+        Returns:
+            The response from the API or None if failed
+
+        """
+        try:
+            for msg_chunk in self.split_into_chunks(message):
+                request = self.youtube.liveChatMessages().insert(
+                    part="snippet",
+                    body={
+                        "snippet": {
+                            "liveChatId": self.live_chat_id,
+                            "type": "textMessageEvent",
+                            "textMessageDetails": {"messageText": msg_chunk},
+                        }
+                    },
+                )
+
+                response = request.execute()
+                time.sleep(1)
+
+            logger.info("Message sent successfully!")
+
+            return response
+
+        except HttpError as e:
+            print(f"An HTTP error {e.resp.status} occurred:")
+            print(e.content)
+            return None
+
+    def split_into_chunks(self, text: str, max_characters: int = 200):
+        current_chunk = ""
+        for sentence in sent_tokenize(text):
+            if len(current_chunk + sentence) < max_characters:
+                current_chunk = f"{current_chunk} {sentence}"
+            else:
+                chunk_to_return = current_chunk
+                current_chunk = sentence
+                yield chunk_to_return
+
+        yield current_chunk
