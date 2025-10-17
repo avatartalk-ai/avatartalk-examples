@@ -20,6 +20,7 @@ export const config = Object.freeze({
   youtube_rtmp_url: getEnv('YOUTUBE_RTMP_URL'),
   youtube_stream_key: getEnv('YOUTUBE_STREAM_KEY'),
   youtube_live_id: getEnv('YOUTUBE_LIVE_ID'),
+  google_client_secrets_path: getEnv('GOOGLE_CLIENT_SECRETS_PATH'),
 
   // OpenAI
   openai_api_key: getEnv('OPENAI_API_KEY'),
@@ -27,5 +28,6 @@ export const config = Object.freeze({
 
   // Topics
   topics_file: getEnv('AVATARTALK_TOPICS_FILE', 'topics.txt'),
+  prompt_path: getEnv('AVATARTALK_PROMPT_PATH', 'prompt.txt'),
 });
 

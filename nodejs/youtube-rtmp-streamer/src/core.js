@@ -21,28 +21,20 @@ export class AvatarTalkTeacher {
     this.topics = [];
     this.avatartalkConnector = new AvatarTalkConnector({ backgroundUrl: this.backgroundUrl, logger: this.logger });
     this.youtubeManager = null;
-
-    this.systemPrompt = `You are "AvatarTalk Teacher", a friendly English coach streaming live 24/7.
-Your job is to produce short, engaging monologue segments about learning and using English.
-Rules:
-- Keep each segment ~60–90 English words (20–40 seconds when spoken).
-- Use clear B1–B2 vocabulary.
-- Structure: hook (1 sentence) → tip (1–2 sentences) → concrete example (1–2 sentences) → tiny task for the viewer (1 sentence) → end with a brief question inviting chat replies.
-- Focus on practical topics: pronunciation, connected speech, phrasal verbs, politeness, travel scenarios, café/small talk, creators & small business use-cases.
-- Avoid controversy and sensitive topics.
-- Do not greet or introduce yourself every time; continue naturally.
-- Never ask the user to type commands; just speak the content.
-Return plain text only, no markdown.`;
+    this.promptPath = config.prompt_path;
+    this.systemPrompt = '';
   }
 
   async initialize() {
     await this.#loadTopics();
+    await this.#loadSystemPrompt();
     await this.avatartalkConnector.initialize();
     if (!config.youtube_api_key) {
       this.logger.critical('YOUTUBE_API_KEY not provided');
       throw new Error('YOUTUBE_API_KEY required');
     }
     this.youtubeManager = new YouTubeCommentManager(config.youtube_api_key, { logger: this.logger });
+    await this.youtubeManager.initialize();
     await this.#setupYouTubeStream();
   }
 
@@ -56,6 +48,17 @@ Return plain text only, no markdown.`;
       this.logger.info(`Loaded ${topics.length} topics from ${path}`);
     } catch (e) {
       this.logger.critical(`Topics file ${this.topicsFile} not found or unreadable`);
+      throw e;
+    }
+  }
+
+  async #loadSystemPrompt() {
+    try {
+      const path = this.promptPath;
+      this.systemPrompt = await fs.readFile(path, 'utf8');
+      this.logger.info(`Loaded system prompt from ${path}`);
+    } catch (e) {
+      this.logger.critical(`Prompt file ${this.promptPath} not found or unreadable`);
       throw e;
     }
   }
@@ -155,6 +158,12 @@ Return plain text only, no markdown.`;
         const topic = await this.#selectTopicAsync(comments);
 
         const segment = await this.#generateSegment(topic);
+
+        // Send message to chat if there were comments
+        if (comments && comments.length > 0) {
+          await this.youtubeManager.sendChatMessage(segment);
+        }
+
         const textGenDuration = (Date.now() - startCommentProcessing) / 1000;
         if (!segment) {
           this.logger.warn('Segment generation failed; retrying soon...');

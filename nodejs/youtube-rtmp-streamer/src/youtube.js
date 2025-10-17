@@ -1,7 +1,12 @@
 import axios from 'axios';
+import { google } from 'googleapis';
 import { OpenAI } from 'openai';
 import { config } from './config.js';
 import { Logger } from './logger.js';
+import natural from 'natural';
+import fs from 'fs';
+
+const { SentenceTokenizer } = natural;
 
 export class YouTubeCommentManager {
   constructor(apiKey, { logger = new Logger('INFO') } = {}) {
@@ -14,6 +19,96 @@ export class YouTubeCommentManager {
     this.openai = new OpenAI({ apiKey: config.openai_api_key });
     this.model = config.avatartalk_model;
     this.systemPrompt = 'You are a helpful assistant that summarizes YouTube Live chat comments. Summarize the comments in a single sentence.';
+    this.youtube = null;
+    this.secretsPath = config.google_client_secrets_path;
+    this.tokenizer = new SentenceTokenizer();
+  }
+
+  async initialize() {
+    if (!this.secretsPath) {
+      throw new Error('GOOGLE_CLIENT_SECRETS_PATH not set!');
+    }
+
+    const SCOPES = ['https://www.googleapis.com/auth/youtube', 'https://www.googleapis.com/auth/youtube.force-ssl'];
+
+    const credentials = JSON.parse(fs.readFileSync(this.secretsPath, 'utf8'));
+
+    // Start local server and get auth code
+    const { code, oauth2Client } = await this.#runLocalServer(credentials, SCOPES);
+    const { tokens } = await oauth2Client.getToken(code);
+    oauth2Client.setCredentials(tokens);
+
+    this.youtube = google.youtube({ version: 'v3', auth: oauth2Client });
+    this.logger.info('OAuth2 authorization successful');
+  }
+
+  async #runLocalServer(credentials, scopes) {
+    const http = await import('http');
+    const { parse } = await import('url');
+    const { exec } = await import('child_process');
+    const { promisify } = await import('util');
+    const execAsync = promisify(exec);
+
+    return new Promise((resolve, reject) => {
+      let oauth2Client;
+
+      const server = http.createServer(async (req, res) => {
+        try {
+          const url = parse(req.url, true);
+          if (url.pathname === '/') {
+            const code = url.query.code;
+            if (code) {
+              res.writeHead(200, { 'Content-Type': 'text/html' });
+              res.end('<h1>Authorization successful!</h1><p>You can close this window and return to the application.</p>');
+              server.close();
+              resolve({ code, oauth2Client });
+            } else {
+              res.writeHead(400, { 'Content-Type': 'text/html' });
+              res.end('<h1>Authorization failed!</h1><p>No code received.</p>');
+              server.close();
+              reject(new Error('No authorization code received'));
+            }
+          }
+        } catch (e) {
+          reject(e);
+        }
+      });
+
+      server.listen(0, async () => {
+        const port = server.address().port;
+        const redirectUrl = `http://localhost:${port}`;
+
+        // Create OAuth2 client with the actual port
+        oauth2Client = new google.auth.OAuth2(
+          credentials.installed.client_id,
+          credentials.installed.client_secret,
+          redirectUrl
+        );
+
+        const authUrl = oauth2Client.generateAuthUrl({
+          access_type: 'offline',
+          scope: scopes,
+        });
+
+        this.logger.info('Please visit this URL to authorize the application:');
+        this.logger.info(authUrl);
+        this.logger.info('');
+
+        // Try to open the browser automatically
+        try {
+          const platform = process.platform;
+          if (platform === 'darwin') {
+            await execAsync(`open "${authUrl}"`);
+          } else if (platform === 'win32') {
+            await execAsync(`start "${authUrl}"`);
+          } else {
+            await execAsync(`xdg-open "${authUrl}"`);
+          }
+        } catch (e) {
+          this.logger.warn('Could not open browser automatically. Please visit the URL above manually.');
+        }
+      });
+    });
   }
 
   async findLiveStream(channelName = 'avatartalk') {
@@ -92,7 +187,7 @@ export class YouTubeCommentManager {
         const snippet = item?.snippet || {};
         const author = item?.authorDetails || {};
         const publishedAt = new Date(snippet?.publishedAt || 0);
-        if (publishedAt > this.lastCheckTime) {
+        if (publishedAt > this.lastCheckTime && !author?.isChatOwner) {
           const details = snippet?.textMessageDetails || {};
           const text = details?.messageText || '';
           comments.push({
@@ -129,6 +224,53 @@ export class YouTubeCommentManager {
       this.logger.error(`OpenAI API error: ${e?.message || e}`);
       throw e;
     }
+  }
+
+  async sendChatMessage(message) {
+    if (!this.youtube || !this.liveChatId) {
+      this.logger.warn('Cannot send message: YouTube client or liveChatId not initialized');
+      return null;
+    }
+
+    try {
+      for (const msgChunk of this.splitIntoChunks(message)) {
+        await this.youtube.liveChatMessages.insert({
+          part: ['snippet'],
+          requestBody: {
+            snippet: {
+              liveChatId: this.liveChatId,
+              type: 'textMessageEvent',
+              textMessageDetails: {
+                messageText: msgChunk,
+              },
+            },
+          },
+        });
+        // Wait 1 second between messages to avoid rate limiting
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+      this.logger.info('Message sent successfully!');
+      return true;
+    } catch (e) {
+      this.logger.error(`Error sending chat message: ${e?.message || e}`);
+      return null;
+    }
+  }
+
+  *splitIntoChunks(text, maxCharacters = 200) {
+    const sentences = this.tokenizer.tokenize(text);
+    let currentChunk = '';
+
+    for (const sentence of sentences) {
+      if ((currentChunk + ' ' + sentence).length < maxCharacters) {
+        currentChunk = currentChunk ? currentChunk + ' ' + sentence : sentence;
+      } else {
+        if (currentChunk) yield currentChunk.trim();
+        currentChunk = sentence;
+      }
+    }
+
+    if (currentChunk) yield currentChunk.trim();
   }
 }
 
