@@ -224,6 +224,9 @@ class AvatarTalkStreamer:
 
         All YouTube API calls are wrapped in run_in_executor to prevent
         blocking the async event loop.
+
+        Uses dynamic polling interval from YouTube API (pollingIntervalMillis)
+        which tells us how often we should check for new messages.
         """
         logger.info("Chat loop started")
 
@@ -237,8 +240,10 @@ class AvatarTalkStreamer:
                 if iteration % 30 == 0:
                     logger.debug("Chat loop heartbeat (iteration %d)", iteration)
 
-                await asyncio.sleep(2)
-                logger.debug("Chat loop: fetching comments...")
+                # Use YouTube's recommended polling interval (in milliseconds)
+                polling_delay = self.youtube_manager.polling_interval_ms / 1000.0
+                await asyncio.sleep(polling_delay)
+                logger.debug("Chat loop: fetching comments (polling interval: %.2fs)...", polling_delay)
 
                 # Run blocking YouTube API call in executor with timeout
                 try:
