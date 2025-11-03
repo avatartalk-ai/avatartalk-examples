@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 import time
 from datetime import UTC, datetime
@@ -9,6 +10,8 @@ import googleapiclient.discovery
 import googleapiclient.errors
 import nltk
 import requests
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
 from googleapiclient.errors import HttpError
 from nltk.tokenize import sent_tokenize
 from openai import OpenAI
@@ -42,13 +45,25 @@ class YouTubeCommentManager:
             "Summarize the comments in a single sentence."
         )
         self.secrets_path = GOOGLE_CLIENT_SECRETS_PATH
+        creds = None
 
         if not self.secrets_path:
             raise ValueError("GOOGLE_CLIENT_SECRETS_PATH not set!")
 
-        flow = google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file(self.secrets_path, SCOPES)
-        credentials = flow.run_local_server(port=0)
-        self.youtube = googleapiclient.discovery.build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
+        if os.path.exists("token.json"):
+            creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+        # If there are no (valid) credentials available, let the user log in.
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            else:
+                flow = google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file(self.secrets_path, SCOPES)
+                creds = flow.run_local_server(port=0)
+                # Save the credentials for the next run
+                with open("token.json", "w") as token:
+                    token.write(creds.to_json())
+
+        self.youtube = googleapiclient.discovery.build(API_SERVICE_NAME, API_VERSION, credentials=creds)
 
     def find_live_stream(self, channel_name: str = "avatartalk") -> str | None:
         """Find the current live stream ID for the given channel."""
@@ -119,50 +134,87 @@ class YouTubeCommentManager:
             return None
 
     def get_recent_comments(self) -> list[dict[str, Any]]:
-        """Get recent comments from YouTube Live chat."""
+        """
+        Get recent comments from YouTube Live chat using authenticated API client.
+
+        Uses the YouTube Data API v3 liveChatMessages.list endpoint with proper
+        OAuth2 authentication. Handles paging correctly by storing the nextPageToken
+        and pollingIntervalMillis values.
+
+        Returns:
+            List of comment dictionaries with text, author, timestamp, and metadata
+
+        """
         if not self.live_chat_id:
             return []
 
         try:
-            messages_url = f"{self.base_url}/liveChat/messages"
-            params = {"liveChatId": self.live_chat_id, "part": "snippet,authorDetails", "key": self.api_key}
+            # Capture current time BEFORE API call to avoid missing messages
+            # that arrive during the API request processing
+            current_time = datetime.now(UTC)
 
-            if self.next_page_token:
-                params["pageToken"] = self.next_page_token
+            # Build request using authenticated youtube client
+            request = self.youtube.liveChatMessages().list(
+                liveChatId=self.live_chat_id,
+                part="snippet,authorDetails",
+                pageToken=self.next_page_token if self.next_page_token else None,
+            )
 
-            response = requests.get(messages_url, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
+            response = request.execute()
 
-            # Update next page token
-            self.next_page_token = data.get("nextPageToken")
+            # Update next page token for proper paging
+            self.next_page_token = response.get("nextPageToken")
+
+            # Get polling interval (YouTube tells us how often to poll)
+            polling_interval_ms = response.get("pollingIntervalMillis", 2000)
+            logger.debug("YouTube polling interval: %dms", polling_interval_ms)
 
             # Filter comments since last check
             comments: list[dict[str, Any]] = []
-            current_time = datetime.now(UTC)
 
-            for item in data.get("items", []):
-                snippet = item["snippet"]
-                author = item["authorDetails"]
+            for item in response.get("items", []):
+                snippet = item.get("snippet", {})
+                author = item.get("authorDetails", {})
 
                 # Parse timestamp
-                published_at = datetime.fromisoformat(snippet["publishedAt"]).replace(tzinfo=UTC)
+                published_at_str = snippet.get("publishedAt")
+                if not published_at_str:
+                    continue
 
-                if published_at > self.last_check_time and not author["isChatOwner"]:
-                    details = snippet.get("textMessageDetails") or {}
-                    text = details.get("messageText", "")
-                    comments.append(
-                        {
-                            "text": text,
-                            "author": author.get("displayName", ""),
-                            "timestamp": published_at,
-                            "is_moderator": author.get("isChatModerator", False),
-                            "is_owner": author.get("isChatOwner", False),
-                        }
-                    )
+                published_at = datetime.fromisoformat(published_at_str)
+
+                # Only include new comments that aren't from the chat owner (our bot)
+                if published_at > self.last_check_time and not author.get("isChatOwner", False):
+                    # Handle different message types
+                    message_type = snippet.get("type", "textMessageEvent")
+
+                    if message_type == "textMessageEvent":
+                        details = snippet.get("textMessageDetails", {})
+                        text = details.get("messageText", "")
+                    else:
+                        # Skip non-text messages (super chats, stickers, etc.)
+                        logger.debug("Skipping non-text message type: %s", message_type)
+                        continue
+
+                    if text:  # Only include messages with actual text
+                        comments.append(
+                            {
+                                "text": text,
+                                "author": author.get("displayName", "Unknown"),
+                                "timestamp": published_at,
+                                "is_moderator": author.get("isChatModerator", False),
+                                "is_owner": author.get("isChatOwner", False),
+                                "channel_id": author.get("channelId", ""),
+                            }
+                        )
 
             self.last_check_time = current_time
+            logger.debug("Retrieved %d new comments", len(comments))
             return comments
+
+        except HttpError as e:
+            logger.exception("YouTube API HTTP error getting comments: %s", e)
+            return []
         except Exception as e:
             logger.exception("Error getting comments: %s", e)
             return []

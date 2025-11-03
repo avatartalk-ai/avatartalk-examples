@@ -6,11 +6,12 @@ import random
 import signal
 import sys
 import time
-from typing import Any
+from datetime import UTC, datetime
 
 from openai import OpenAI
 
 from livestream.avatartalk import AvatarTalkConnector
+from livestream.chat_handler import ChatHandler
 from livestream.config import (
     AVATARTALK_API_KEY,
     AVATARTALK_AVATAR,
@@ -23,17 +24,25 @@ from livestream.config import (
     YOUTUBE_RTMP_URL,
     YOUTUBE_STREAM_KEY,
 )
+from livestream.context_store import GlobalContextStore
 from livestream.youtube import YouTubeCommentManager
 
 logger = logging.getLogger(__name__)
+
+SECONDS_UNTIL_REFRESH = 180
 
 
 class AvatarTalkStreamer:
     """
     Coordinates topic selection, text generation, and streaming.
 
-    This class fetches YouTube Live comments, generates short speaking
-    segments using the OpenAI API, and streams them via AvatarTalk.
+    This class now separates two main functions:
+    1. Chat handling - Direct Q&A with viewers (runs independently)
+    2. Avatar narration - Higher-level commentary that observes both
+       the chat interactions and the ongoing conversation
+
+    Both use a shared GlobalContextStore to maintain awareness of
+    what's happening in the stream.
     """
 
     def __init__(self, live_id: str, language: str, background_url: str | None = None):
@@ -48,8 +57,11 @@ class AvatarTalkStreamer:
         self.remaining_duration_to_play = 10
         self.prompt_path = AVATARTALK_PROMPT_PATH
 
-        # Rolling context - keep last 2 assistant messages
-        self.context_history: list[dict] = []
+        # Global context store - shared between chat and narration
+        self.context_store = GlobalContextStore(max_chat_messages=50, max_interactions=10)
+
+        # Rolling context for avatar narration - keep last 2 segments
+        self.narration_history: list[dict] = []
 
         # Load topics
         self.topics = self._load_topics()
@@ -63,9 +75,19 @@ class AvatarTalkStreamer:
             background_url or AVATARTALK_DEFAULT_BACKGROUND_URL,
         )
 
-        # System prompt
+        # System prompts - separate for chat and narration
         with open(self.prompt_path) as f:
-            self.system_prompt = f.read()
+            self.narration_system_prompt = f.read()
+
+        # Chat handler for direct Q&A
+        chat_system_prompt = (
+            "You are a helpful AI assistant responding to questions in a YouTube Live chat. "
+            "Keep your responses concise (2-3 sentences max) and friendly. "
+            "An avatar narrator is also discussing topics on the stream - you work together "
+            "but handle different aspects: you respond directly to viewer questions, while "
+            "the avatar provides higher-level commentary."
+        )
+        self.chat_handler = ChatHandler(self.client, self.model, self.context_store, chat_system_prompt)
 
         # Set up YouTube comment manager
         youtube_api_key = YOUTUBE_API_KEY
@@ -76,7 +98,6 @@ class AvatarTalkStreamer:
             logger.critical("YOUTUBE_API_KEY not provided")
             sys.exit(1)
 
-        self.recent_comments: list[dict[str, Any]] = []
         self.last_comment_check = time.time()
 
     def _init_openai_client(self) -> OpenAI:
@@ -121,11 +142,29 @@ class AvatarTalkStreamer:
         return f"Produce ONE continuous segment in English about: {topic}. Aim for ~{word_count} words. End with a single-sentence question to the live chat."
 
     def _build_messages(self, user_prompt: str) -> list[dict[str, str]]:
-        """Build message list with system prompt, context history, and current user prompt."""
-        messages = [{"role": "system", "content": self.system_prompt}]
+        """
+        Build message list for avatar narration.
 
-        # Add last 2 assistant messages for context
-        messages.extend(self.context_history[-2:])
+        Includes:
+        - System prompt (avatar as higher-level observer)
+        - Recent chat context from global store
+        - Last 2 narration segments for continuity
+        - Current user prompt (topic)
+        """
+        messages = [{"role": "system", "content": self.narration_system_prompt}]
+
+        # Add context from global store
+        context_summary = self.context_store.get_context_summary()
+        if context_summary and context_summary != "No recent context available.":
+            messages.append(
+                {
+                    "role": "system",
+                    "content": f"Current stream context (viewer chat + Q&A):\n{context_summary}",
+                }
+            )
+
+        # Add last 2 narration segments for continuity
+        messages.extend(self.narration_history[-2:])
 
         # Add current user prompt
         messages.append({"role": "user", "content": user_prompt})
@@ -133,7 +172,12 @@ class AvatarTalkStreamer:
         return messages
 
     def _generate_segment(self, topic: str) -> str | None:
-        """Generate a single monologue segment for the given topic."""
+        """
+        Generate a single narration segment for the avatar.
+
+        The avatar acts as a higher-level observer, aware of both
+        the topic and the ongoing chat interactions.
+        """
         user_prompt = self._create_user_prompt(topic)
         messages = self._build_messages(user_prompt)
 
@@ -144,8 +188,8 @@ class AvatarTalkStreamer:
 
             segment = response.choices[0].message.content.strip()
 
-            # Update rolling context with the new assistant message
-            self.context_history.append({"role": "assistant", "content": segment})
+            # Update rolling context with the new narration segment
+            self.narration_history.append({"role": "assistant", "content": segment})
 
             return segment
 
@@ -157,20 +201,6 @@ class AvatarTalkStreamer:
         """Handle Ctrl+C gracefully."""
         logger.info("Stopping AvatarTalk Teacher...")
         self.shutdown_requested = True
-
-    def _select_topic(self, comments: list[dict[str, Any]] | None) -> str:
-        """Choose a topic from comments or randomly from the topics file."""
-        if comments:
-            logger.info("Retrieved %d new comments", len(comments))
-            try:
-                summary = self.youtube_manager.summarize_comments(comments)
-                if summary:
-                    return summary
-            except Exception:
-                logger.warning("Falling back to random topic after summarize failure")
-        topic = random.choice(self.topics)
-        logger.info("No new comments, using topic: %s", topic)
-        return topic
 
     async def _play_segment(self, segment: str) -> float:
         """Send the segment to the connector and return audio duration (seconds)."""
@@ -185,8 +215,159 @@ class AvatarTalkStreamer:
         logger.info("Segment duration: %.2fs", duration)
         return duration
 
+    async def _chat_loop(self) -> None:
+        """
+        Independent chat handling loop.
+
+        Continuously monitors for new comments and responds to questions
+        immediately, without waiting for avatar narration segments.
+
+        All YouTube API calls are wrapped in run_in_executor to prevent
+        blocking the async event loop.
+        """
+        logger.info("Chat loop started")
+
+        loop = asyncio.get_event_loop()
+        iteration = 0
+
+        while not self.shutdown_requested:
+            try:
+                iteration += 1
+
+                if iteration % 30 == 0:
+                    logger.debug("Chat loop heartbeat (iteration %d)", iteration)
+
+                await asyncio.sleep(2)
+                logger.debug("Chat loop: fetching comments...")
+
+                # Run blocking YouTube API call in executor with timeout
+                try:
+                    comments = await asyncio.wait_for(
+                        loop.run_in_executor(None, self.youtube_manager.get_recent_comments),
+                        timeout=10.0,
+                    )
+                except TimeoutError:
+                    logger.warning("Chat loop: get_recent_comments() timed out after 10s")
+                    continue
+
+                if not comments:
+                    logger.debug("Chat loop: no new comments")
+                    continue
+
+                logger.info("Processing %d new comments in chat loop", len(comments))
+
+                # Process each comment
+                for comment in comments:
+                    try:
+                        response = await self.chat_handler.process_comment(comment)
+
+                        if response:
+                            logger.info("Sending chat response: %s", response[:100])
+                            try:
+                                await asyncio.wait_for(
+                                    loop.run_in_executor(None, self.youtube_manager.send_chat_message, response),
+                                    timeout=10.0,
+                                )
+                                logger.debug("Chat response sent successfully")
+                            except TimeoutError:
+                                logger.warning("Chat loop: send_chat_message() timed out after 10s")
+                            except Exception as e:
+                                logger.exception("Failed to send chat message: %s", e)
+                    except Exception as e:
+                        logger.exception("Error processing comment: %s", e)
+
+            except Exception as e:
+                logger.exception("Error in chat loop: %s", e)
+                await asyncio.sleep(5)
+
+        logger.info("Chat loop stopped")
+
+    async def _narration_loop(self) -> None:
+        """
+        Avatar narration loop.
+
+        Generates topic-based segments that observe the stream context,
+        including recent chat interactions and Q&A history from the global store.
+
+        Note: Does NOT poll YouTube comments directly - relies on chat loop
+        to populate the global context store.
+
+        All blocking calls (OpenAI summarization) are wrapped in run_in_executor
+        to prevent blocking the async event loop.
+        """
+        logger.info("Narration loop started")
+
+        loop = asyncio.get_event_loop()
+        cooldown_remaining = 0.0
+
+        while not self.shutdown_requested:
+            if cooldown_remaining >= self.remaining_duration_to_play:
+                await asyncio.sleep(1)
+                cooldown_remaining -= 1
+                continue
+
+            try:
+                start_processing = time.time()
+
+                recent_messages = self.context_store.get_recent_chat_messages(count=10)
+
+                chat_is_fresh = False
+                if recent_messages:
+                    # Check the timestamp of the most recent message
+                    latest_message = recent_messages[-1]
+                    time_since_last_message = (datetime.now(UTC) - latest_message.timestamp).total_seconds()
+                    chat_is_fresh = time_since_last_message < SECONDS_UNTIL_REFRESH  # 3 minutes
+
+                    if not chat_is_fresh:
+                        logger.info(
+                            "Last chat message was %.1f minutes ago, using random topic", time_since_last_message / 60
+                        )
+
+                # If we have fresh chat activity, try to generate a topic from it
+                if chat_is_fresh:
+                    # Create a summary of recent messages for topic selection
+                    try:
+                        topic = await loop.run_in_executor(
+                            None,
+                            self.youtube_manager.summarize_comments,
+                            [{"author": msg.author, "text": msg.text} for msg in recent_messages[-5:]],
+                        )
+                        logger.info("Using topic from recent chat context: %s", topic)
+                    except Exception:
+                        logger.warning("Failed to summarize recent chat, using random topic")
+                        topic = random.choice(self.topics)
+                else:
+                    # No recent chat activity or chat is stale, use random topic
+                    topic = random.choice(self.topics)
+                    logger.info("No fresh chat activity, using random topic: %s", topic)
+
+                segment = await loop.run_in_executor(None, self._generate_segment, topic)
+
+                text_generation_time = time.time() - start_processing
+
+                if not segment:
+                    logger.warning("Segment generation failed; retrying soon...")
+                    await asyncio.sleep(3.0)
+                    continue
+
+                duration = await self._play_segment(segment)
+                cooldown_remaining += duration - text_generation_time
+
+            except KeyboardInterrupt:
+                logger.info("Narration loop interrupted")
+                break
+            except Exception as e:
+                logger.exception("Error in narration loop: %s", e)
+                await asyncio.sleep(3.0)
+
+        logger.info("Narration loop stopped")
+
     async def run_async(self) -> None:
-        """Async main loop for handling RTMP and other async operations."""
+        """
+        Async main loop - runs two concurrent tasks:
+        1. Chat handler - responds to questions immediately
+        2. Avatar narration - generates topic-based segments with full context
+        """
         try:
             await self.avatartalk_connector.initialize()
 
@@ -196,46 +377,18 @@ class AvatarTalkStreamer:
             logger.info("Press Ctrl+C to stop")
             if self.youtube_manager:
                 logger.info("YouTube comment integration: ENABLED")
+                logger.info("Chat handling: ENABLED (separate thread)")
+                logger.info("Avatar narration: ENABLED (with context awareness)")
 
-            cooldown_remaining = 0.0
-            while not self.shutdown_requested:
-                if cooldown_remaining >= self.remaining_duration_to_play:
-                    await asyncio.sleep(1)
-                    cooldown_remaining -= 1
-                    continue
+            # Run chat and narration loops concurrently
+            await asyncio.gather(
+                self._chat_loop(),
+                self._narration_loop(),
+                return_exceptions=True,
+            )
 
-                try:
-                    start_comment_processing = time.time()
-                    comments = self.youtube_manager.get_recent_comments()
-
-                    topic = self._select_topic(comments)
-
-                    # Generate segment
-                    segment = self._generate_segment(topic)
-
-                    if comments:
-                        self.youtube_manager.send_chat_message(segment)
-
-                    text_gen_duration = time.time() - start_comment_processing
-
-                    if not segment:
-                        # API error occurred, wait a bit longer before retrying
-                        logger.warning("Segment generation failed; retrying soon...")
-                        await asyncio.sleep(3.0)
-                        continue
-
-                    start_video_request = time.time()
-                    duration = await self._play_segment(segment)
-
-                    delay = duration - text_gen_duration - (time.time() - start_video_request)
-                    cooldown_remaining += delay
-
-                except KeyboardInterrupt:
-                    logger.info("AvatarTalk Teacher stopped. Thanks for listening!")
-                    break
-                except Exception as e:
-                    logger.exception("Unexpected error: %s", e)
-                    break
+        except KeyboardInterrupt:
+            logger.info("AvatarTalk Teacher stopped. Thanks for listening!")
         except Exception as e:
             logger.exception("Unexpected error during run: %s", e)
         finally:
