@@ -1,0 +1,22 @@
+[project]
+name = "expressive-webchat"
+version = "0.1.0"
+description = "AvatarTalk Expressive WebChat - Natural conversations with video avatars"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.20.0",
+    "websockets>=11.0",
+    "deepgram-sdk>=5.0.0",
+    "litellm>=1.0.0",
+    "python-dotenv>=1.0.0",
+    "jinja2>=3.1.0",
+    "aiofiles>=23.0.0",
+    "httpx>=0.24.0",
+    "pydantic-settings>=2.0.0"
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.1",
+]

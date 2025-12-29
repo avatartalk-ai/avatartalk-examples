@@ -1,0 +1,129 @@
+AvatarTalk knowledge base (TXT)
+
+==============================
+
+Product: AvatarTalk (avatartalk.ai)
+Last checked: 2025-10-07
+
+1) one‑line summary
+Real‑time talking‑avatar generation API. Generate high‑quality avatar videos with a single API call; usage‑based pricing; supports streaming for real‑time apps; 17 languages.
+
+2) elevator pitch
+“Real‑Time AI Avatars That Actually Work.” One endpoint to turn text into a lip‑synced video with selectable avatar and emotion. Optional streaming for interactive experiences. No subscriptions—credits only. Free 600 seconds on signup.
+
+3) core value props
+• Streaming generation suitable for live chat/customer service/interactive apps.
+• Single REST endpoint; fast integration; examples for Python and Node.js.
+• Credits instead of monthly plans; seconds never expire.
+• 17 language options for global reach.
+• Production‑ready API with claimed 99.9% uptime.
+
+4) typical use cases
+• Developers & product teams: chatbots/assistants, instant onboarding clips from text or audio, one‑click localization, webhook‑ready API integrations.
+• Customer success & onboarding: personalized welcome videos, feature walkthroughs, instant FAQ answers, multilingual support videos.
+• Growth & marketing: dynamic product demos per lead, personalized recovery offers, auto‑dubbed testimonials, multi‑channel ads with ready‑made avatars.
+
+5) demo & playground
+• Live AI Chat Demo: converse with an avatar; 5 free messages; real‑time video replies; no signup required.
+• Interactive Playground: full control of parameters (text, avatar, emotion, language); history & usage analytics.
+
+6) avatars, emotions, languages
+• Avatars: a catalog including e.g. African Man/Woman, Arab Man/Woman, Colombian Woman, Elderly Japanese Man/Woman, European Man/Woman, Iranian Man, Japanese Man/Woman, Mexican Man/Woman, etc.
+• Emotions: neutral, happy (and others where shown in UI; API requires an emotion string).
+• Languages: 17 supported, including: English, Spanish, French, German, Italian, Portuguese, Polish, Turkish, Russian, Dutch, Czech, Arabic, Chinese, Japanese, Hungarian, Korean, Hindi.
+
+7) API overview (REST)
+Primary endpoints
+• POST https://api.avatartalk.ai/inference  → returns JSON with mp4_url and html_url (trigger URLs; first access generates and consumes credits; later loads are cached).
+• POST https://api.avatartalk.ai/inference?stream=true  → streams MP4 bytes in real time (for interactive/low‑latency use cases).
+
+Auth
+• Header: Authorization: Bearer {YOUR_API_KEY}
+
+Request body parameters
+• text (string, required): text to be spoken.
+• avatar (string, required): avatar identifier (e.g., "african_man", "japanese_woman").
+• emotion (string, required): e.g., "neutral", "happy".
+• language (string, required): ISO‑like code (e.g., en, es, fr, de, it, pt, pl, tr, ru, nl, cs, ar, zh, ja, hu, ko, hi).
+• delayed (boolean, optional): if true, returns trigger URLs without upfront processing.
+
+cURL example
+curl -X POST https://api.avatartalk.ai/inference   -H "Authorization: Bearer <TOKEN>"   -H "Content-Type: application/json"   -d '{
+    "text": "Hello, and welcome to the team! We're so excited to have you join us and can't wait to see the great things you'll do!",
+    "avatar": "japanese_woman",
+    "emotion": "happy",
+    "language": "en"
+  }'
+
+Notes
+• Each second of generated video consumes one credit‑second (e.g., a 30‑second clip uses 30 seconds).
+• Claimed generation latency: most videos in under ~2 seconds.
+• No documented rate limits at this time (generate as many videos as credits allow).
+
+8) SDKs, examples, and sample apps
+• Official examples repository (Python & Node.js) with these samples:
+  – python/simple‑webchat (FastAPI; text‑first chat; voice input optional; server streaming playback proxy)
+  – python/livekit‑webchat (LiveKit‑based webchat; avatar speaks into a LiveKit room via /ws/infer)
+  – python/livekit‑agents (LiveKit Agents integration)
+  – python/youtube‑rtmp‑streamer (OpenAI‑assisted content; streams via AvatarTalk to YouTube Live RTMP; adapts to live chat)
+  – nodejs/simple‑webchat (Express port of the Python app)
+  – nodejs/livekit‑webchat (Node LiveKit chat; avatar speaks in room via /ws/infer)
+  – nodejs/youtube‑rtmp‑streamer (Node RTMP streamer)
+
+Key implementation requirements from examples
+• Python: >=3.10, uv; .env with OPENAI_API_KEY and AVATARTALK_API_KEY (plus LiveKit vars for LiveKit samples).
+• Node.js: >=18; .env with OPENAI_API_KEY, AVATARTALK_API_KEY (plus LiveKit vars where applicable).
+
+9) pricing (usage‑based; seconds never expire)
+• Free registration includes: full API access, docs & SDKs, interactive playground, testing avatars/emotions, usage analytics, 600 free seconds (≈10 minutes of video).
+• Bundles (illustrative from site):
+  – Starter 100min: 6000 seconds (≈100 min) • $10 • $0.10/min
+  – Growth 300min: 18000 seconds (≈300 min) • $24 • $0.08/min (20% off)
+  – Scale 1000min: 60000 seconds (≈1000 min) • $50 • $0.05/min (50% off)
+
+10) enterprise features
+• Custom avatars & custom voice models (brand‑tailored).
+• Advanced generation modes: text2video, audio2video, prompt2video.
+• WebRTC output for real‑time streaming.
+• LiveKit Agents integration.
+• On‑premises deployment option.
+• IoT SDK for embedded/edge use.
+
+11) FAQ highlights
+• Speed: most videos in under ~2 seconds.
+• Credits: 1 credit‑second = 1 video‑second.
+• Custom avatars: library available now; custom creation planned.
+• Rate limits: none stated; generation is limited by your credits.
+• Support: free tier via Discord; paid users get priority email support.
+• Production: API is production‑ready; stated 99.9% uptime.
+• Languages: 17 (see list in section 6).
+
+12) legal
+• Privacy Policy — last updated 2025‑09‑01.
+• Terms of Service — last updated 2025‑09‑01.
+• Contact: support@avatartalk.ai.
+
+13) quick start checklist
+[ ] Create account and obtain API key.
+[ ] Use the Live Demo to verify desired avatar/emotion/language.
+[ ] Test cURL with your API key.
+[ ] Implement /inference (regular JSON) for queued generation workflows.
+[ ] Implement /inference?stream=true for real‑time playback.
+[ ] Handle trigger URLs (mp4_url/html_url) and caching rules.
+[ ] Track credit usage and purchase appropriate seconds bundle.
+[ ] (Optional) Integrate LiveKit for live experiences.
+[ ] (Optional) Prepare custom avatars/voices for enterprise.
+
+14) troubleshooting tips
+• 401 Unauthorized → check Bearer token and header name.
+• Slow first load from mp4_url/html_url → first access triggers generation; subsequent loads are cached.
+• No audio/lip‑sync → verify language code, emotion string, and avatar id; ensure the player handles MP4 correctly.
+• Streaming stutters → prefer /inference?stream=true and ensure client supports progressive MP4 playback; check network throughput.
+• Multilingual output issues → test with shorter text and confirm supported language codes.
+
+15) glossary
+• Trigger URL: a URL that, on first access, generates the video and consumes credits, then serves cached content thereafter.
+• Credit‑second: billing unit equal to one second of rendered video.
+• LiveKit: real‑time audio/video infra used by some example apps; enables avatars to speak into a room via WebRTC.
+
+— End of file —
