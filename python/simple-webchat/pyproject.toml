@@ -1,0 +1,21 @@
+[project]
+name = "simple-webchat"
+version = "0.1.0"
+description = "Text-first demo: OpenAI generates responses; AvatarTalk renders video via /inference"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.30.0",
+  "jinja2>=3.1.4",
+  "requests>=2.32.3",
+  "python-dotenv>=1.0.1",
+  "openai>=1.46.0",
+  "python-multipart>=0.0.20",
+]
+
+[project.scripts]
+simple-webchat = "simple_webchat.__main__:main"
+
+[tool.uv]
+package = true
