@@ -37,7 +37,7 @@ Authorization: Bearer {your_api_key}
 
 ## POST /inference
 
-Generate avatar videos with text-to-speech synthesis.
+Generate avatar videos from text (speech is synthesised for you) or from your own voice recording, which the avatar lip-syncs to.
 
 ### Endpoints
 
@@ -58,6 +58,47 @@ Generate avatar videos with text-to-speech synthesis.
 | `language` | string | No | Language for speech synthesis (defaults to `"en"`) | See [Language Options](#language-options) |
 | `stream` | string | No | Enable streaming mode (query parameter) | `"true"` for streaming, omit for regular response |
 | `delayed` | string/boolean | No | Enable delayed execution mode | `"true"` or `true` for delayed, omit for immediate execution |
+
+### Audio Input (multipart upload)
+
+Send `multipart/form-data` instead of JSON to make the avatar speak your own recording. The other parameters become form fields, and `text` turns into an optional label shown in your generation history.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `audio` | file | Yes | The recording. WAV, MP3, M4A (AAC) or OGG/Opus; any sample rate, mono or stereo |
+| `avatar` | string | Yes | See [Avatar Options](#avatar-options) |
+| `emotion` | string | Yes | `"happy"`, `"neutral"`, `"serious"` |
+| `language` | string | No | Recorded language, defaults to `"en"` |
+| `text` | string | No | Label for the history, defaults to the file name |
+| `delayed` | string | No | `"true"` stores the recording and renders it when a URL is first opened |
+
+Limits: 0.5 seconds to 5 minutes of audio, at most 50 MB per file. The video is as long as the recording, and it is charged one credit per started second of audio.
+
+```bash
+curl -X POST https://api.avatartalk.ai/inference \
+  -H "Authorization: Bearer $AVATARTALK_API_KEY" \
+  -F "audio=@speech.wav" \
+  -F "avatar=european_woman" \
+  -F "emotion=neutral" \
+  -F "language=en"
+```
+
+```python
+import requests
+
+with open("speech.wav", "rb") as recording:
+    response = requests.post(
+        "https://api.avatartalk.ai/inference",
+        headers={"Authorization": f"Bearer {API_KEY}"},
+        files={"audio": recording},
+        data={"avatar": "european_woman", "emotion": "neutral", "language": "en"},
+        timeout=300,
+    )
+response.raise_for_status()
+print(response.json()["mp4_url"])
+```
+
+The response has the same shape as a text request, with `"input_type": "audio"`. An unreadable, empty, too short or too long file is answered `400 INVALID_PARAMETERS` with the reason under `details.audio`.
 
 #### Avatar Options
 
@@ -273,6 +314,7 @@ ws.addEventListener('close', (event) => {
   console.log('Connection closed:', event.code, event.reason);
 });
 ```
+
 
 ## WebSocket /ws/continuous
 
@@ -1057,7 +1099,7 @@ Each successful inference consumes video time from your account:
 - **1 second of generated video = 1 second of video time**
 
 Video time is consumed when:
-- Regular `/api/inference` request completes successfully
+- Regular `/inference` request completes successfully (for an audio upload, one second per started second of the recording)
 - Delayed request URLs (`mp4_url` or `html_url`) are accessed
 - WebSocket streaming generates video output
 - LiveKit sessions are active
