@@ -6,7 +6,6 @@ from typing import AsyncIterator, Awaitable, Callable, Optional
 
 from deepgram import AsyncDeepgramClient
 from deepgram.core.events import EventType
-from deepgram.extensions.types.sockets.listen_v1_control_message import ListenV1ControlMessage
 from litellm import acompletion
 
 from .avatartalk_client import AvatarTalkClient
@@ -24,6 +23,21 @@ from .config import (
 logger = logging.getLogger(__name__)
 
 
+def _msg_field(message, key: str, default=None):
+    """Read a field from a Deepgram streaming message.
+
+    deepgram-sdk 7.x delivers socket messages as plain dicts; 5.x delivered
+    typed pydantic objects with attributes. ``getattr`` alone silently returns
+    None on a dict, so TurnInfo/EndOfTurn were never matched and no turn ever
+    fired. (5.x also crashes outright on new server fields such as
+    ``end_of_turn_confidence`` -- strict models forbid extras -- which is why
+    the SDK is pinned to 7.x.)
+    """
+    if isinstance(message, dict):
+        return message.get(key, default)
+    return getattr(message, key, default)
+
+
 class ConversationOrchestrator:
     def __init__(self):
         """Initialize the orchestrator."""
@@ -34,7 +48,7 @@ class ConversationOrchestrator:
         )
         logger.info(f"Orchestrator initialized: url={settings.AVATARTALK_API_BASE}")
 
-        # Deepgram setup (SDK 5.3.0)
+        # Deepgram setup (SDK 7.x; message fields read via _msg_field)
         self.deepgram = AsyncDeepgramClient(api_key=settings.DEEPGRAM_API_KEY)
         self.dg_connection = None
         self.transcript_buffer = []  # Buffer for turn detection
@@ -261,7 +275,7 @@ class ConversationOrchestrator:
 
                 # Define message handler for Flux listen.v2 streaming.
                 def on_message(message) -> None:
-                    msg_type = getattr(message, "type", None)
+                    msg_type = _msg_field(message, "type")
 
                     # Connected event (initial handshake/configuration)
                     if msg_type == "Connected":
@@ -270,7 +284,7 @@ class ConversationOrchestrator:
 
                     # Fatal error event
                     if msg_type == "FatalError":
-                        error_message = getattr(message, "message", None)
+                        error_message = _msg_field(message, "message")
                         logger.error(f"Deepgram Flux fatal error: {error_message or message}")
                         # Stop listening on fatal error; the worker loop will exit
                         self.is_listening = False
@@ -283,8 +297,8 @@ class ConversationOrchestrator:
                             logger.debug(f"Ignoring Flux TurnInfo during avatar turn")
                             return
 
-                        event = getattr(message, "event", None)
-                        transcript_text = getattr(message, "transcript", "") or ""
+                        event = _msg_field(message, "event")
+                        transcript_text = _msg_field(message, "transcript", "") or ""
 
                         if transcript_text:
                             logger.debug(f"Flux TurnInfo ({event}): {transcript_text}")
@@ -406,12 +420,12 @@ class ConversationOrchestrator:
 
                 # Define message handler for Nova listen.v1 streaming
                 def on_message(message) -> None:
-                    msg_type = getattr(message, "type", None)
+                    msg_type = _msg_field(message, "type")
 
                     # Handle Results messages (transcripts)
                     if msg_type == "Results":
                         # Check if this is a from_finalize response (ignore it)
-                        from_finalize = getattr(message, "from_finalize", False)
+                        from_finalize = _msg_field(message, "from_finalize", False)
                         if from_finalize:
                             logger.debug("Ignoring from_finalize response")
                             return
@@ -422,16 +436,16 @@ class ConversationOrchestrator:
                             return
 
                         try:
-                            channel = getattr(message, "channel", None)
+                            channel = _msg_field(message, "channel")
                             if not channel:
                                 return
-                            alternatives = getattr(channel, "alternatives", [])
+                            alternatives = _msg_field(channel, "alternatives", [])
                             if not alternatives:
                                 return
 
-                            transcript = alternatives[0].transcript if alternatives else ""
-                            is_final = getattr(message, "is_final", False)
-                            speech_final = getattr(message, "speech_final", False)
+                            transcript = _msg_field(alternatives[0], "transcript", "") or ""
+                            is_final = _msg_field(message, "is_final", False)
+                            speech_final = _msg_field(message, "speech_final", False)
 
                             if transcript:
                                 logger.debug(
@@ -553,11 +567,12 @@ class ConversationOrchestrator:
 
     async def _nova_keepalive_loop(self, connection):
         """Send KeepAlive messages every 5 seconds to prevent NET-0001 timeout."""
-        keepalive_msg = ListenV1ControlMessage(type="KeepAlive")
         while True:
             await asyncio.sleep(5)
             try:
-                await connection.send_control(keepalive_msg)
+                # SDK 7.x: dedicated send_keep_alive() replaced
+                # send_control(ListenV1ControlMessage(...)) from 5.x.
+                await connection.send_keep_alive()
                 logger.debug("Nova KeepAlive sent")
             except Exception as e:
                 logger.warning(f"Failed to send Nova KeepAlive: {e}")
@@ -620,9 +635,9 @@ class ConversationOrchestrator:
             return
 
         try:
-            # Send Finalize control message (Nova only)
-            finalize_msg = ListenV1ControlMessage(type="Finalize")
-            await self.dg_connection.send_control(finalize_msg)
+            # Send Finalize control message (Nova only).
+            # SDK 7.x: dedicated send_finalize() replaced send_control().
+            await self.dg_connection.send_finalize()
             logger.info("Sent Finalize message to Deepgram Nova")
         except Exception as e:
             logger.warning(f"Failed to send Finalize to Deepgram: {e}")

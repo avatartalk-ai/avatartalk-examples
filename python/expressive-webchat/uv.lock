@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.10"
 
 [[package]]
@@ -325,7 +325,7 @@ wheels = [
 
 [[package]]
 name = "deepgram-sdk"
-version = "5.3.0"
+version = "7.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -334,9 +334,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/2d/9c/4529cc5818e9305ac9be3c24545249ad57418cbc3736c3f1c0a8397b59f5/deepgram_sdk-5.3.0.tar.gz", hash = "sha256:4e682a53f64c26dc49d8fd70865eae1e98236d313870d1bcf5f107f125e53793", size = 148179, upload-time = "2025-11-03T15:24:02.436Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f4/e1/d77f17f55fac94bf6aa81fb01a355ecfd923e12b5f19ef5a67cfc202d652/deepgram_sdk-7.4.0.tar.gz", hash = "sha256:0d35f830bcaa01196e3546b8c326f1d872f8fa52fc841c5640c2d68ef6678a03", size = 212507, upload-time = "2026-06-26T20:55:56.053Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/58/e2/cda09edad156199cc9e330533f6b72cb5276c0d476cab7f1744be7ffa16e/deepgram_sdk-5.3.0-py3-none-any.whl", hash = "sha256:431418fdffbd93cdf6a78a168984e3df3cb696818ced1cfc52ce336e0bc6a7fe", size = 390669, upload-time = "2025-11-03T15:24:01.078Z" },
+    { url = "https://files.pythonhosted.org/packages/09/57/718090410686cbc8d039178e518ab9a010c9dd7bbef327918323f562274a/deepgram_sdk-7.4.0-py3-none-any.whl", hash = "sha256:713a84c22dfdb87fa37f44b36ece47938580e3343815254cc19fcaffff9915c5", size = 565593, upload-time = "2026-06-26T20:55:54.565Z" },
 ]
 
 [[package]]
@@ -385,7 +385,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiofiles", specifier = ">=23.0.0" },
-    { name = "deepgram-sdk", specifier = ">=5.0.0" },
+    { name = "deepgram-sdk", specifier = ">=7,<8" },
     { name = "fastapi", specifier = ">=0.100.0" },
     { name = "httpx", specifier = ">=0.24.0" },
     { name = "jinja2", specifier = ">=3.1.0" },

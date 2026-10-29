@@ -7,7 +7,11 @@ dependencies = [
     "fastapi>=0.100.0",
     "uvicorn>=0.20.0",
     "websockets>=11.0",
-    "deepgram-sdk>=5.0.0",
+    # Pinned to the 7.x line: 5.x strict models crash on new server fields
+    # (Deepgram added end_of_turn_confidence to Flux messages 2026-07, killing
+    # every 5.x connection ~1.5s in); code parses 7.x dict messages via
+    # _msg_field and uses 7.x send_finalize/send_keep_alive.
+    "deepgram-sdk>=7,<8",
     "litellm>=1.0.0",
     "python-dotenv>=1.0.0",
     "jinja2>=3.1.0",

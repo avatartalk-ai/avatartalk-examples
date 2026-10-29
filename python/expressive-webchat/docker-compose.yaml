@@ -1,0 +1,10 @@
+services:
+  expressive-webchat:
+    restart: always
+    build: .
+    env_file:
+      - .env
+    volumes:
+      - ./.env:/app/.env:ro
+    ports:
+      - 8001:8080
