@@ -23,6 +23,7 @@ class AvatarTalkConnector:
         stream_key: str,
         background_url: str | None = None,
         silence_duration: float = 4.0,
+        tts_provider: str | None = None,
         max_reconnect_attempts: int = 5,
         initial_backoff: float = 1.0,
         max_backoff: float = 30.0,
@@ -34,6 +35,7 @@ class AvatarTalkConnector:
         self.api_url = url or DEFAULT_API_URL
         self.api_key = api_key
         self.silence_duration = silence_duration
+        self.tts_provider = tts_provider
         if not rtmp_url or not stream_key:
             raise ValueError("YOUTUBE_RTMP_URL and YOUTUBE_STREAM_KEY are required for RTMP output")
         self.url = (
@@ -50,6 +52,8 @@ class AvatarTalkConnector:
         )
         if background_url:
             self.url += f"&background_url={background_url}"
+        if self.tts_provider:
+            self.url += f"&tts_provider={self.tts_provider}"
 
         self._ws: websockets.ClientConnection | None = None
         self._lock = asyncio.Lock()

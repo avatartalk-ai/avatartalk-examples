@@ -13,6 +13,7 @@ export class AvatarTalkConnector {
     rtmpUrl = config.youtube_rtmp_url,
     streamKey = config.youtube_stream_key,
     backgroundUrl = config.avatartalk_default_background_url,
+    ttsProvider = config.avatartalk_tts_provider,
     roomName = 'avatartalk-live',
     increaseResolution = true,
     logger = new Logger('INFO'),
@@ -24,12 +25,13 @@ export class AvatarTalkConnector {
     this.apiKey = apiKey;
     this.avatar = avatar;
     this.language = language || 'en';
+    this.ttsProvider = ttsProvider;
     this.roomName = roomName;
     this.increaseResolution = !!increaseResolution;
     this.logger = logger;
     this._ws = null;
 
-    const qs = new URLSearchParams({
+    const params = {
       output_type: 'rtmp',
       input_type: 'text',
       stream_id: this.roomName,
@@ -39,7 +41,11 @@ export class AvatarTalkConnector {
       increase_resolution: this.increaseResolution ? 'true' : 'false',
       rtmp_url: `${rtmpUrl.replace(/\/$/, '')}/${streamKey}`,
       background_url: `${backgroundUrl.replace(/\/$/, '')}`,
-    });
+    };
+    if (this.ttsProvider) {
+      params.tts_provider = this.ttsProvider;
+    }
+    const qs = new URLSearchParams(params);
     this.url = `${this.apiUrl.replace(/\/$/, '')}/ws/infer?${qs.toString()}`;
   }
 

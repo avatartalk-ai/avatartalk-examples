@@ -20,6 +20,7 @@ from livestream.config import (
     AVATARTALK_DEFAULT_BACKGROUND_URL,
     AVATARTALK_MODEL,
     AVATARTALK_TOPICS_FILE,
+    AVATARTALK_TTS_PROVIDER,
     AVATARTALK_URL,
     YOUTUBE_API_KEY,
     YOUTUBE_RTMP_URL,
@@ -162,6 +163,7 @@ class AvatarTalkStreamer:
             rtmp_url=self.rtmp_url,
             stream_key=self.stream_key,
             background_url=background_url or AVATARTALK_DEFAULT_BACKGROUND_URL,
+            tts_provider=AVATARTALK_TTS_PROVIDER,
         )
         logger.debug("AvatarTalk connector created")
 
