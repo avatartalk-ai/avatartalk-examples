@@ -83,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
             args.avatar
             or _load_optional_json_mapping("avatars.json", args.language)
             or AVATARTALK_AVATAR
-            or "european_woman"
+            or "european_man"
         )
         logger.debug("Avatar name: %s", avatar_name)
 
