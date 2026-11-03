@@ -289,8 +289,9 @@ class YouTubeCommentManager:
                 "contentDetails": {
                     "enableAutoStart": True,
                     "enableAutoStop": False,
-                    "enableDvr": True,
+                    "enableDvr": False,
                     "recordFromStart": True,
+                    "latencyPreference": "ultraLow",
                 },
             },
         ).execute()

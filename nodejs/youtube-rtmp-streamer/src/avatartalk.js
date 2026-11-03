@@ -13,6 +13,7 @@ export class AvatarTalkConnector {
     rtmpUrl = config.youtube_rtmp_url,
     streamKey = config.youtube_stream_key,
     backgroundUrl = config.avatartalk_default_background_url,
+    silenceDuration = 2.0,
     ttsProvider = config.avatartalk_tts_provider,
     roomName = 'avatartalk-live',
     increaseResolution = true,
@@ -25,11 +26,13 @@ export class AvatarTalkConnector {
     this.apiKey = apiKey;
     this.avatar = avatar;
     this.language = language || 'en';
+    this.silenceDuration = silenceDuration;
     this.ttsProvider = ttsProvider;
     this.roomName = roomName;
     this.increaseResolution = !!increaseResolution;
     this.logger = logger;
     this._ws = null;
+    this.firstChunkOnWs = true;
 
     const params = {
       output_type: 'rtmp',
@@ -39,6 +42,7 @@ export class AvatarTalkConnector {
       emotion: 'neutral',
       language: this.language,
       increase_resolution: this.increaseResolution ? 'true' : 'false',
+      silence_duration: String(this.silenceDuration),
       rtmp_url: `${rtmpUrl.replace(/\/$/, '')}/${streamKey}`,
       background_url: `${backgroundUrl.replace(/\/$/, '')}`,
     };
@@ -58,7 +62,10 @@ export class AvatarTalkConnector {
       });
       let settled = false;
       const finish = (err) => { if (settled) return; settled = true; err ? reject(err) : resolve(); };
-      ws.once('open', () => finish());
+      ws.once('open', () => {
+        this.firstChunkOnWs = true;
+        finish();
+      });
       ws.once('error', (e) => finish(e));
       this._ws = ws;
     });

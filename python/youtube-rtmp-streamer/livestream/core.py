@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import random
@@ -19,7 +20,6 @@ from livestream.config import (
     AVATARTALK_API_KEY,
     AVATARTALK_DEFAULT_BACKGROUND_URL,
     AVATARTALK_MODEL,
-    AVATARTALK_TOPICS_FILE,
     AVATARTALK_TTS_PROVIDER,
     AVATARTALK_URL,
     YOUTUBE_API_KEY,
@@ -54,6 +54,24 @@ LANGUAGE_MAP = {
     "ko": "Korean",
     "hi": "Hindi",
 }
+
+THEME_DOMAINS = (
+    "Workplace & leadership situations (pushing back on deadlines, giving tough feedback, running crisp meetings, salary & career talks)",
+    "Everyday social life & travel (hotels, airports, restaurants, making friends abroad, small talk that isn't boring, graceful exits)",
+    "Sales, client relations & negotiations (handling objections, building trust, following up without being annoying, setting boundaries)",
+    "Idioms, phrasal verbs & colorful native expressions people use in daily conversation",
+    "Cultural & tone nuances (British vs American understatement, sounding polite vs passive-aggressive, softening direct requests)",
+    "Modern digital communication (Slack, emails, voice notes, video calls — sounding warm and sharp instead of stiff or robotic)",
+    "Pronunciation, word stress & rhythm secrets that instantly make spoken English sound more natural",
+    "Storytelling, humor, and thinking on your feet when you get an unexpected question",
+)
+
+ARC_STEPS = (
+    "Part 1 of 4 (Introduce the Theme): Open a new mini-chapter. Set up a relatable real-life situation for this theme and teach the first natural phrase or core insight.",
+    "Part 2 of 4 (Common Mistake vs Upgrade): Stay on the EXACT same theme! Contrast a stiff, textbook, or awkward phrase people often use in this situation with what fluent speakers actually say.",
+    "Part 3 of 4 (Nuance, Mini-Dialogue, or Idiom): Stay on the EXACT same theme! Go one layer deeper—share a vivid mini-example, a tone nuance, or a great idiom that fits this exact situation.",
+    "Part 4 of 4 (Wrap-Up & Audience Question): Conclude this mini-chapter with a final practical takeaway and ask a natural question inviting viewers in the live chat to share how they handle it.",
+)
 
 
 class AvatarTalkStreamer:
@@ -96,15 +114,12 @@ class AvatarTalkStreamer:
         self.model = AVATARTALK_MODEL
         logger.debug("Using model: %s", self.model)
 
-        self.topics_file = AVATARTALK_TOPICS_FILE
         self.shutdown_requested = False
         self._shutdown_event: asyncio.Event | None = None
         self.room_name = "avatartalk-live"
         self.youtube_live_id = live_id
         self.stream_language = language
         self.voice_id = voice_id
-        # Cooldown lead time (seconds before current segment ends to start generating the next one)
-        self.remaining_duration_to_play = 4
         self.stream_key = stream_key or YOUTUBE_STREAM_KEY
         self.avatar_name = avatar_name
         self.skip_welcome = skip_welcome
@@ -115,14 +130,15 @@ class AvatarTalkStreamer:
         logger.debug("Initializing global context store...")
         self.context_store = GlobalContextStore(max_chat_messages=50, max_interactions=10)
 
-        # Rolling context for avatar narration - keep last 2 segments only
-        # Using deque with maxlen to prevent unbounded growth
-        self.narration_history: deque = deque(maxlen=2)
-        self.recent_topics: deque[str] = deque(maxlen=10)
-
-        # Load topics
-        logger.debug("Loading topics from %s...", self.topics_file)
-        self.topics = self._load_topics()
+        # Rolling context for avatar narration:
+        # - narration_history keeps the last 8 spoken segments so sentence rhythm & openings stay varied
+        # - covered_topics keeps the last 150 topic summaries (>1 hour of streaming) so the agent never loops
+        self.narration_history: deque = deque(maxlen=8)
+        self.covered_topics: deque[str] = deque(maxlen=150)
+        self._segment_counter = 0
+        self._arc_step = 0
+        self._theme_index = 0
+        self.current_theme: str | None = None
 
         # System prompts - separate for chat and narration
         language_full = LANGUAGE_MAP.get(self.stream_language, "English")
@@ -172,6 +188,7 @@ class AvatarTalkStreamer:
 
         self.last_comment_check = time.time()
         self.last_connector_restart = time.time()
+        self.last_segment_sent_at = time.time()
 
         # Dedicated single-thread executor for all YouTube API calls.
         # googleapiclient uses httplib2 internally which is NOT thread-safe;
@@ -279,46 +296,71 @@ class AvatarTalkStreamer:
             # Don't raise - allow initialization to continue without YouTube integration
             return None
 
-    def _load_topics(self) -> list[str]:
-        """Load topics from file - file must exist."""
-        if not os.path.exists(self.topics_file):
-            logger.critical("Topics file %s not found", self.topics_file)
-            sys.exit(1)
-
-        try:
-            with open(self.topics_file, encoding="utf-8") as f:
-                topics = [line.strip() for line in f if line.strip()]
-            if not topics:
-                logger.critical("No topics found in %s", self.topics_file)
-                sys.exit(1)
-            logger.info("Loaded %d topics from %s", len(topics), self.topics_file)
-            return topics
-        except Exception as e:
-            logger.exception("Could not read %s: %s", self.topics_file, e)
-            sys.exit(1)
-
-    def _pick_random_topic(self) -> str:
-        """Pick a random topic avoiding recently used ones."""
-        available = [t for t in self.topics if t not in self.recent_topics] or self.topics
-        chosen = random.choice(available)
-        self.recent_topics.append(chosen)
-        return chosen
-
-    def _create_user_prompt(self, topic: str) -> str:
-        """Create user prompt for the given topic with concise word count."""
-        word_count = random.randint(35, 50)
+    def _create_user_prompt(self, chat_topic_hint: str | None = None) -> str:
+        """Create dynamic user prompt that develops a cohesive 4-part theme before moving to a new one."""
+        word_count = random.randint(28, 36)
         language_name = LANGUAGE_MAP.get(self.stream_language, "English")
-        return f"Produce ONE concise segment in {language_name} about: {topic}. Strictly {word_count} words max (3-4 short sentences). End with a quick question to the live chat."
+        include_cta = (self._segment_counter % 8) == 7
+        self._segment_counter += 1
+
+        covered_list = list(self.covered_topics)
+        covered_block = (
+            "Previously covered themes & sub-points (DO NOT repeat any of these concepts, words, idioms, or scenarios):\n- "
+            + "\n- ".join(covered_list[-80:])
+            if covered_list
+            else "No topics covered yet in this session."
+        )
+
+        cta_instruction = (
+            "At the end of this segment, casually mention that viewers can practice 1-on-1 live voice role-play at avatartalk.ai/ai-training."
+            if include_cta
+            else "Do NOT mention avatartalk.ai in this segment; focus 100% on the conversation and language insight."
+        )
+
+        if chat_topic_hint:
+            self.current_theme = f"Viewer chat topic: {chat_topic_hint}"
+            self._arc_step = 1
+            focus_instruction = (
+                f"Viewers in the live chat just brought up: {chat_topic_hint}.\n"
+                f"Make this our current theme! Respond to it warmly and teach a practical {language_name} insight around it."
+            )
+        elif self._arc_step == 0 or not self.current_theme:
+            domain = THEME_DOMAINS[self._theme_index % len(THEME_DOMAINS)]
+            self._theme_index += 1
+            step_instruction = ARC_STEPS[0]
+            self._arc_step = 1
+            focus_instruction = (
+                f"Domain for this new 4-part mini-chapter: {domain}\n"
+                f"{step_instruction}\n"
+                f"Choose a specific, fresh overarching 'theme' in {language_name} that is NOT in the previously covered list. "
+                "If you were talking about something else right before this, use a smooth 3–5 word bridge into this new theme."
+            )
+        else:
+            step_instruction = ARC_STEPS[self._arc_step]
+            self._arc_step = (self._arc_step + 1) % len(ARC_STEPS)
+            focus_instruction = (
+                f"Current overarching theme (STAY ON THIS THEME): {self.current_theme}\n"
+                f"{step_instruction}\n"
+                "Connect naturally to what you just said in the previous segment so it feels like one continuous, thoughtful explanation."
+            )
+
+        return (
+            f"{covered_block}\n\n"
+            f"{focus_instruction}\n"
+            f"{cta_instruction}\n"
+            f"Target length for 'segment': ~{word_count} words (2–3 natural sentences in {language_name}).\n"
+            'Return JSON: {"theme": "<current overarching theme>", "topic": "<specific 5-10 word sub-point taught in this segment>", "segment": "<spoken text>"}'
+        )
 
     def _build_messages(self, user_prompt: str) -> list[dict[str, str]]:
         """
         Build message list for avatar narration.
 
         Includes:
-        - System prompt (avatar as higher-level observer)
+        - System prompt (avatar as autonomous coach)
         - Recent chat context from global store
-        - Last 2 narration segments for continuity
-        - Current user prompt (topic)
+        - Last 8 narration segments for continuity and stylistic variety
+        - Current user prompt (with covered-topic memory and angle)
         """
         messages = [{"role": "system", "content": self.narration_system_prompt}]
 
@@ -332,8 +374,7 @@ class AvatarTalkStreamer:
                 }
             )
 
-        # Add last 2 narration segments for continuity
-        # deque already stores max 2 items, so just convert to list
+        # Add recent narration segments for continuity and to avoid repeating sentence openings
         messages.extend(list(self.narration_history))
 
         # Add current user prompt
@@ -341,22 +382,57 @@ class AvatarTalkStreamer:
 
         return messages
 
-    def _generate_segment(self, topic: str) -> str | None:
+    def _generate_segment(self, chat_topic_hint: str | None = None) -> str | None:
         """
-        Generate a single narration segment for the avatar.
+        Autonomously choose a fresh topic and generate the next narration segment.
 
-        The avatar acts as a higher-level observer, aware of both
-        the topic and the ongoing chat interactions.
+        Stores the generated topic summary in `self.covered_topics` so the stream
+        never loops on the same ideas over multi-hour runs.
         """
-        user_prompt = self._create_user_prompt(topic)
+        user_prompt = self._create_user_prompt(chat_topic_hint)
         messages = self._build_messages(user_prompt)
 
         try:
             response = self.client.chat.completions.create(
-                model=self.model, messages=messages, max_tokens=120, temperature=0.8
+                model=self.model,
+                messages=messages,
+                max_tokens=200,
+                temperature=0.85,
+                response_format={"type": "json_object"},
             )
 
-            segment = response.choices[0].message.content.strip()
+            raw_content = response.choices[0].message.content.strip()
+            theme_name = ""
+            topic_summary = ""
+            segment = raw_content
+            try:
+                parsed = json.loads(raw_content)
+                if isinstance(parsed, dict):
+                    theme_name = str(parsed.get("theme") or "").strip()
+                    topic_summary = str(parsed.get("topic") or "").strip()
+                    segment = str(parsed.get("segment") or "").strip()
+            except json.JSONDecodeError:
+                logger.warning("Model did not return valid JSON; using raw content as segment")
+
+            if not segment:
+                return None
+
+            if theme_name:
+                self.current_theme = theme_name
+
+            if topic_summary:
+                entry = f"{self.current_theme} — {topic_summary}" if self.current_theme else topic_summary
+                self.covered_topics.append(entry)
+                logger.info(
+                    "Agent segment (#%d, step=%d/4, memory=%d): [%s] %s",
+                    self._segment_counter,
+                    ((self._arc_step - 1) % 4) + 1,
+                    len(self.covered_topics),
+                    self.current_theme or "general",
+                    topic_summary,
+                )
+            else:
+                self.covered_topics.append(segment[:60])
 
             # Update rolling context with the new narration segment
             self.narration_history.append({"role": "assistant", "content": segment})
@@ -388,15 +464,17 @@ class AvatarTalkStreamer:
         return self.shutdown_requested
 
     async def _play_segment(self, segment: str) -> float:
-        """Send the segment to the connector and return audio duration (seconds)."""
-        # Output segment to stdout (used by TTS pipeline)
-        print(segment)
-        print()
-
+        """Send a segment to the connector, print it as playback starts, and return duration (seconds)."""
         logger.debug("Sending segment and waiting for response from AvatarTalk API...")
         audio_info = await self.avatartalk_connector.send_and_receive(segment)
         duration = float(audio_info.get("audio_duration", 0.0))
-        logger.info("Segment duration: %.2fs", duration)
+        self.last_segment_sent_at = time.time()
+
+        # Output segment to stdout once synthesis is complete and playback begins
+        print(segment, flush=True)
+        print(flush=True)
+
+        logger.info("Segment duration: %.2fs (includes %.1fs pause)", duration, self.avatartalk_connector.silence_duration)
         return duration
 
     async def _chat_loop(self) -> None:
@@ -554,17 +632,15 @@ class AvatarTalkStreamer:
         # Track monotonic time when current queued audio playback finishes on the server
         playback_ends_at = time.monotonic()
         last_narrated_message_ts: datetime | None = None
+        generation_lead_seconds = 5.0
+        send_lead_seconds = 1.8
+        first_chunk_startup_offset = 3.5
 
         while not self.shutdown_requested:
-            if self.avatartalk_connector.reconnected_event:
-                logger.info("WebSocket reconnected — resetting playback schedule to play immediately")
-                self.avatartalk_connector.reconnected_event = False
-                playback_ends_at = time.monotonic()
-
             now = time.monotonic()
             remaining_playback = max(0.0, playback_ends_at - now)
-            if remaining_playback > self.remaining_duration_to_play:
-                wait_for = min(2.0, remaining_playback - self.remaining_duration_to_play)
+            if remaining_playback > generation_lead_seconds:
+                wait_for = min(1.0, remaining_playback - generation_lead_seconds)
                 if await self._sleep_or_shutdown(wait_for):
                     break
                 continue
@@ -579,25 +655,21 @@ class AvatarTalkStreamer:
                     and (datetime.now(UTC) - msg.timestamp).total_seconds() < SECONDS_UNTIL_REFRESH
                 ]
 
-                # If we have new, unnarrated chat activity, generate a topic from it once
+                # If we have new, unnarrated chat activity, summarize it as a hint for the agent
+                chat_topic_hint: str | None = None
                 if unseen_messages:
                     last_narrated_message_ts = unseen_messages[-1].timestamp
                     try:
-                        topic = await loop.run_in_executor(
+                        chat_topic_hint = await loop.run_in_executor(
                             self._yt_executor,
                             self.youtube_manager.summarize_comments,
                             [{"author": msg.author, "text": msg.text} for msg in unseen_messages[-5:]],
                         )
-                        logger.info("Using topic from new chat messages: %s", topic)
+                        logger.info("Using topic hint from new chat messages: %s", chat_topic_hint)
                     except Exception:
-                        logger.warning("Failed to summarize recent chat, using random topic")
-                        topic = self._pick_random_topic()
-                else:
-                    # No new unnarrated chat messages, pick a fresh random topic
-                    topic = self._pick_random_topic()
-                    logger.info("No new chat messages since last narration, using topic: %s", topic)
+                        logger.warning("Failed to summarize recent chat, agent will pick topic autonomously")
 
-                segment = await loop.run_in_executor(None, self._generate_segment, topic)
+                segment = await loop.run_in_executor(None, self._generate_segment, chat_topic_hint)
 
                 if not segment:
                     logger.warning("Segment generation failed; retrying soon...")
@@ -605,11 +677,22 @@ class AvatarTalkStreamer:
                         break
                     continue
 
+                # Wait until previous segment (including its 2.0s pause) is within `send_lead_seconds` of finishing
+                while not self.shutdown_requested:
+                    rem = playback_ends_at - time.monotonic()
+                    if rem <= send_lead_seconds:
+                        break
+                    if await self._sleep_or_shutdown(min(0.5, rem - send_lead_seconds)):
+                        break
+                if self.shutdown_requested:
+                    break
+
                 duration = await self._play_segment(segment)
                 now_after_send = time.monotonic()
-                if self.avatartalk_connector.reconnected_event:
+                if self.avatartalk_connector.first_chunk_on_ws or self.avatartalk_connector.reconnected_event:
+                    self.avatartalk_connector.first_chunk_on_ws = False
                     self.avatartalk_connector.reconnected_event = False
-                    playback_ends_at = now_after_send + duration
+                    playback_ends_at = max(now_after_send, playback_ends_at) + duration + first_chunk_startup_offset
                 else:
                     playback_ends_at = max(now_after_send, playback_ends_at) + duration
 
@@ -661,6 +744,17 @@ class AvatarTalkStreamer:
                     logger.debug("Healthcheck: in cooldown period, %.1f seconds remaining", remaining)
                     continue
 
+                # If the narration loop recently sent a chunk and received a valid duration response,
+                # the WebSocket/RTMP pipeline is actively streaming. Skip YouTube status polling to
+                # avoid false-positive 'noData' restarts between non-realtime ffmpeg frame batches.
+                since_last_segment = time.time() - self.last_segment_sent_at
+                if since_last_segment < 35.0:
+                    if _iteration > 0:
+                        logger.info("Healthcheck: Narration pipeline active, resetting counter")
+                        _iteration = 0
+                    logger.debug("Healthcheck: Narration pipeline active (last chunk %.1fs ago)", since_last_segment)
+                    continue
+
                 # Check stream status (run in dedicated executor to avoid blocking)
                 try:
                     status = await asyncio.wait_for(
@@ -672,11 +766,22 @@ class AvatarTalkStreamer:
                     continue
 
                 if status == "noData":
+                    # Re-check after 5s to avoid false positives during brief inter-chunk pauses
+                    if await self._sleep_or_shutdown(5.0):
+                        break
+                    with contextlib.suppress(TimeoutError):
+                        status = await asyncio.wait_for(
+                            loop.run_in_executor(
+                                self._yt_executor, self.youtube_manager.get_stream_status, self.youtube_live_id
+                            ),
+                            timeout=10.0,
+                        )
+                if status == "noData":
                     _iteration += 1
-                    logger.warning("Healthcheck: Stream status is 'noData' (iteration %d/5)", _iteration)
-                    if _iteration >= 5:
+                    logger.warning("Healthcheck: Stream status is 'noData' (iteration %d/6)", _iteration)
+                    if _iteration >= 6:
                         logger.warning(
-                            "Healthcheck: Stream status 'noData' persisted for 5 checks, restarting AvatarTalk connector"
+                            "Healthcheck: Stream status 'noData' persisted for 6 checks, restarting AvatarTalk connector"
                         )
                         if await self.avatartalk_connector.restart():
                             logger.info("Healthcheck: Successfully restarted connector")

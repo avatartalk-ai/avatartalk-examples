@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import uuid
 from typing import Any
 
 import websockets
@@ -22,7 +23,7 @@ class AvatarTalkConnector:
         rtmp_url: str,
         stream_key: str,
         background_url: str | None = None,
-        silence_duration: float = 4.0,
+        silence_duration: float = 2.0,
         tts_provider: str | None = None,
         max_reconnect_attempts: int = 5,
         initial_backoff: float = 1.0,
@@ -36,28 +37,17 @@ class AvatarTalkConnector:
         self.api_key = api_key
         self.silence_duration = silence_duration
         self.tts_provider = tts_provider
+        self.rtmp_url = rtmp_url
+        self.stream_key = stream_key
+        self.background_url = background_url
         if not rtmp_url or not stream_key:
             raise ValueError("YOUTUBE_RTMP_URL and YOUTUBE_STREAM_KEY are required for RTMP output")
-        self.url = (
-            f"{self.api_url}/ws/infer?"
-            "output_type=rtmp&"
-            "input_type=text&"
-            f"stream_id={self.room_name}&"
-            f"avatar={self.avatar}&"
-            f"emotion={self.emotion}&"
-            f"language={self.language}&"
-            f"increase_resolution=true&"
-            f"silence_duration={self.silence_duration}&"
-            f"rtmp_url={rtmp_url}/{stream_key}"
-        )
-        if background_url:
-            self.url += f"&background_url={background_url}"
-        if self.tts_provider:
-            self.url += f"&tts_provider={self.tts_provider}"
+        self.url = self._build_url()
 
         self._ws: websockets.ClientConnection | None = None
         self._lock = asyncio.Lock()
         self.reconnected_event = False
+        self.first_chunk_on_ws = True
 
         # Reconnection configuration
         self.max_reconnect_attempts = max_reconnect_attempts
@@ -65,13 +55,35 @@ class AvatarTalkConnector:
         self.max_backoff = max_backoff
         self._is_reconnecting = False
 
+    def _build_url(self) -> str:
+        stream_id = f"{self.room_name}-{uuid.uuid4().hex[:8]}"
+        url = (
+            f"{self.api_url}/ws/infer?"
+            "output_type=rtmp&"
+            "input_type=text&"
+            f"stream_id={stream_id}&"
+            f"avatar={self.avatar}&"
+            f"emotion={self.emotion}&"
+            f"language={self.language}&"
+            f"increase_resolution=true&"
+            f"silence_duration={self.silence_duration}&"
+            f"rtmp_url={self.rtmp_url}/{self.stream_key}"
+        )
+        if self.background_url:
+            url += f"&background_url={self.background_url}"
+        if self.tts_provider:
+            url += f"&tts_provider={self.tts_provider}"
+        return url
+
     async def initialize(self) -> None:
+        self.url = self._build_url()
         self._ws = await websockets.connect(
             self.url,
             additional_headers={"Authorization": f"Bearer {self.api_key}"},
             ping_interval=20,
             ping_timeout=20,
         )
+        self.first_chunk_on_ws = True
 
     async def _close_raw_ws(self) -> None:
         """Close the underlying websocket without sending sentinel or reconnecting."""
@@ -105,6 +117,7 @@ class AvatarTalkConnector:
             try:
                 logger.info("Attempting to reconnect (attempt %d/%d)...", attempt, self.max_reconnect_attempts)
                 await self._close_raw_ws()
+                self.url = self._build_url()
 
                 self._ws = await websockets.connect(
                     self.url,
@@ -114,6 +127,7 @@ class AvatarTalkConnector:
                 )
                 logger.info("Successfully reconnected to AvatarTalk websocket")
                 self.reconnected_event = True
+                self.first_chunk_on_ws = True
                 self._is_reconnecting = False
                 return True
 

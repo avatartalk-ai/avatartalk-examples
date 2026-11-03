@@ -57,9 +57,6 @@ GOOGLE_CLIENT_SECRETS_PATH=gcp_youtube_oauth_key.json
 
 # Optional: set if you don't pass the video ID via CLI
 YOUTUBE_LIVE_ID=<VIDEO_ID>
-
-# Topics file (must exist). Defaults to topics.txt in this folder
-AVATARTALK_TOPICS_FILE=topics.txt
 ```
 
 ## Run
@@ -154,7 +151,7 @@ Here's the list of available backgrounds provided by AvatarTalk.ai:
 
 ## How It Works
 - Reads recent YouTube Live chat messages (if available) via YouTube Data API v3.
-- Chooses a topic from chat summary or randomly from `topics.txt`.
+- Autonomously generates fresh conversation topics and segments using rolling memory of previously covered concepts and live chat context so it never loops.
 - Loads system prompts from `narration.prompt` (for avatar monologues) and `chat.prompt` (for chat responses).
 - Both prompts use `{language}` placeholder, which is replaced with the full language name based on `--language` flag.
 - Generates a 60–90 word monologue with OpenAI using the narration prompt and context history.
@@ -164,7 +161,6 @@ Here's the list of available backgrounds provided by AvatarTalk.ai:
 ## Troubleshooting
 - **"YOUTUBE_API_KEY not provided"**: Set `YOUTUBE_API_KEY` and ensure YouTube Data API v3 is enabled.
 - **"GOOGLE_CLIENT_SECRETS_PATH not set!"**: You need OAuth2 credentials for posting to chat. See "YouTube Setup" above.
-- **"Topics file ... not found"**: Ensure `AVATARTALK_TOPICS_FILE` points to an existing file (default `topics.txt`).
 - **OAuth2 browser window doesn't open**: Make sure you're running on a machine with a browser. The credentials are cached after first authorization.
 - **No comments detected**: Confirm the stream is live and the `VIDEO_ID` is correct; check that the channel has an active live chat.
 - **Cannot post to chat**: Verify OAuth2 authorization was successful and the account has permission to post to the channel's live chat.

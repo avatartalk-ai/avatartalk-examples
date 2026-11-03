@@ -24,7 +24,6 @@ AVATARTALK_PROMPT_PATH = os.getenv("AVATARTALK_PROMPT_PATH")
 
 # Teacher setup
 AVATARTALK_MODEL = os.getenv("AVATARTALK_MODEL", "gpt-4o-mini")
-AVATARTALK_TOPICS_FILE = os.getenv("AVATARTALK_TOPICS_FILE", "topics.txt")
 
 # GeneFace (optional legacy setting)
 GENEFACE_URL = os.getenv("GENEFACE_URL")

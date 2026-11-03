@@ -27,8 +27,7 @@ export const config = Object.freeze({
   openai_api_key: getEnv('OPENAI_API_KEY'),
   avatartalk_model: getEnv('AVATARTALK_MODEL', 'gpt-4o-mini'),
 
-  // Topics
-  topics_file: getEnv('AVATARTALK_TOPICS_FILE', 'topics.txt'),
+  // Prompts
   prompt_path: getEnv('AVATARTALK_PROMPT_PATH', 'prompt.txt'),
 });
 
