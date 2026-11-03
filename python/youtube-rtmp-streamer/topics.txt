@@ -1,119 +1,35 @@
-Linking and connected speech (reductions like gonna, wanna)
-Pronouncing TH vs T/D sounds clearly
-R/L distinction with minimal pairs practice
-Top 5 phrasal verbs for travel (check in, head out, look for)
-Ordering at a café politely (could I…, would you mind…)
-Small talk openers and natural follow-ups
-Email tone: direct vs polite approaches
-Phone and online meeting essential phrases
-Asking for clarification and paraphrasing skills
-Idioms about time and work productivity
-Short pitch for creators (collab, repost, credit)
-Common false friends for Polish learners
-Business English: scheduling meetings effectively
-Pronunciation of -ed endings (t, d, id sounds)
-Using modal verbs for politeness levels
-Weather talk and seasonal vocabulary
-Expressing opinions without being rude
-Making suggestions in different contexts
-Agreeing and disagreeing politely
-Describing your daily routine naturally
-Talking about hobbies and interests
-Giving directions clearly and simply
-Shopping vocabulary and phrases
-Restaurant conversations beyond ordering
-Complaining politely when things go wrong
-Making appointments and reservations
-Talking about past experiences using past tenses
-Future plans: will vs going to usage
-Present perfect for life experiences
-Conditional sentences for hypothetical situations
-Passive voice in everyday situations
-Reported speech for telling stories
-Question formation patterns and intonation
-Prepositions of time, place, and movement
-Comparative and superlative forms
-Quantifiers: much, many, few, little
-Articles: when to use a, an, the, or nothing
-Collocations with common verbs (make, do, take, give)
-Phrasal verbs for daily activities
-Idioms for emotions and feelings
-Business small talk topics
-Networking conversation starters
-Presentation opening and closing phrases
-Meeting participation language
-Negotiation and persuasion techniques
-Customer service language
-Job interview common questions and answers
-Describing your work and responsibilities
-Talking about career goals and ambitions
-Workplace conflict resolution language
-Team collaboration vocabulary
-Project management terminology
-Email writing: formal vs informal tone
-Social media English and abbreviations
-Online shopping and e-commerce terms
-Technology vocabulary for daily use
-Health and medical appointment language
-Describing symptoms to a doctor
-Fitness and exercise vocabulary
-Nutrition and healthy eating terms
-Travel planning and booking language
-Airport and flight vocabulary
-Hotel check-in and service requests
-Asking for tourist information
-Cultural differences and customs
-Festival and celebration descriptions
-Food and cooking terminology
-Recipe instructions and measurements
-Home and household vocabulary
-Describing your living situation
-Neighborhood and community language
-Transportation options and directions
-Banking and financial services vocabulary
-Insurance and legal document terms
-Education system and academic language
-Describing learning experiences
-Study habits and techniques vocabulary
-Library and research terminology
-Art and culture appreciation language
-Music and entertainment vocabulary
-Sports and games terminology
-Nature and environment descriptions
-Weather patterns and climate change
-Sustainable living vocabulary
-Personal finance and budgeting terms
-Shopping for clothes and fashion
-Beauty and personal care vocabulary
-Family relationships and dynamics
-Friendship and social connections
-Dating and relationship vocabulary
-Wedding and celebration language
-Parenting and childcare terms
-Pet care and animal vocabulary
-Gardening and plant care language
-Home improvement and DIY terms
-Car maintenance and driving vocabulary
-Public transportation etiquette
-Emergency situations and safety
-First aid and medical emergencies
-Travel safety and precautions
-Internet safety and digital literacy
-Time management and productivity
-Goal setting and achievement language
-Problem-solving strategies vocabulary
-Decision-making process terms
-Stress management and relaxation
-Mental health awareness language
-Personal development vocabulary
-Leadership and management terms
-Communication skills improvement
-Conflict resolution techniques
-Cultural sensitivity and awareness
-Diversity and inclusion language
-Environmental consciousness vocabulary
-Community involvement and volunteering
-Charity and social causes terminology
-News and current events discussion
-Political awareness without controversy
-Economic concepts for daily life
+Answering "Tell me about yourself" in a job interview without rambling
+Handling price objections politely in sales conversations ("It's too expensive")
+Salary negotiation phrases: how to ask for a higher offer confidently
+De-escalating an angry customer on a support call with empathy phrases
+Giving constructive feedback to a teammate without sounding harsh
+Pushing back on unrealistic deadlines politely ("What can we deprioritize?")
+Daily standup updates: sounding clear, concise, and impactful
+Following up on an unanswered client email without sounding pushy
+Handling "I need to think about it" in a B2B discovery call
+Explaining a technical incident or outage to non-technical stakeholders
+Asking smart questions at the end of a job interview
+Saying "I don't know" professionally on a client call and promising a follow-up
+Interrupting politely in a fast-paced online meeting to share your point
+Summarizing action items and next steps at the end of a business call
+Cold outreach and networking openers that don't sound robotic
+Apologizing for a mistake or delay while keeping customer trust
+Presenting pros and cons of two options to a decision-maker
+Asking for a referral or testimonial from a happy customer
+Turning a feature question into a value conversation in product demos
+Disagreeing with your manager or client respectfully in a meeting
+Small talk before a video call starts: natural openers beyond weather
+Clarifying vague requirements from a client ("Just to make sure we're aligned...")
+Answer structure for behavioral interview questions (STAR method phrases)
+Setting boundaries when scope creep happens in a project
+Pitching your product or idea in 30 seconds (elevator pitch structure)
+Handling "Your competitor is cheaper" with value-focused language
+Onboarding a new client: setting clear expectations on the kickoff call
+Asking for budget and timeline early in a sales conversation
+Softening direct requests in English using modal verbs (Could we, Would you mind)
+Linking words and transitions that make presentations sound executive-ready
+Pronunciation tips for common business words often mispronounced (schedule, niche, agenda, status)
+Phrasal verbs used in every tech and business meeting (circle back, ramp up, roll out, drill down)
+How to ask a speaker to repeat or clarify when the audio breaks up on a call
+Closing a sales or discovery call with a clear calendar commitment
+Negotiating contract terms and compromises ("If you can commit to X, we can offer Y")

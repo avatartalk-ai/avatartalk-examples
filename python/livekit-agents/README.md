@@ -34,9 +34,9 @@ export LIVEKIT_URL="your_livekit_url"
 
 ## How to Run
 
-1. Clone the LiveKit Agents repository:
+1. Clone the LiveKit Agents repository at `livekit-agents@1.6.5`, the last release with the example:
    ```bash
-   git clone https://github.com/livekit/agents.git
+   git clone --branch livekit-agents@1.6.5 https://github.com/livekit/agents.git
    cd agents
    ```
 
@@ -49,7 +49,11 @@ export LIVEKIT_URL="your_livekit_url"
 
 4. Install dependencies and run:
    ```bash
-   pip install -r requirements.txt
+   pip install "livekit-agents[openai]==1.6.5" "livekit-plugins-avatartalk==1.6.5" python-dotenv
    python agent_worker.py dev
    ```
+
+   Set `LIVEKIT_AGENT_NAME` to register under an agent name (explicit dispatch) instead of joining every room.
+
+The `Dockerfile` here runs the same script in a container.
 

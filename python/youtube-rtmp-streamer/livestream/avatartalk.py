@@ -22,6 +22,7 @@ class AvatarTalkConnector:
         rtmp_url: str,
         stream_key: str,
         background_url: str | None = None,
+        silence_duration: float = 4.0,
         max_reconnect_attempts: int = 5,
         initial_backoff: float = 1.0,
         max_backoff: float = 30.0,
@@ -32,6 +33,7 @@ class AvatarTalkConnector:
         self.room_name = "avatartalk-live"
         self.api_url = url or DEFAULT_API_URL
         self.api_key = api_key
+        self.silence_duration = silence_duration
         if not rtmp_url or not stream_key:
             raise ValueError("YOUTUBE_RTMP_URL and YOUTUBE_STREAM_KEY are required for RTMP output")
         self.url = (
@@ -43,12 +45,15 @@ class AvatarTalkConnector:
             f"emotion={self.emotion}&"
             f"language={self.language}&"
             f"increase_resolution=true&"
+            f"silence_duration={self.silence_duration}&"
             f"rtmp_url={rtmp_url}/{stream_key}"
         )
         if background_url:
             self.url += f"&background_url={background_url}"
 
         self._ws: websockets.ClientConnection | None = None
+        self._lock = asyncio.Lock()
+        self.reconnected_event = False
 
         # Reconnection configuration
         self.max_reconnect_attempts = max_reconnect_attempts
@@ -57,7 +62,25 @@ class AvatarTalkConnector:
         self._is_reconnecting = False
 
     async def initialize(self) -> None:
-        self._ws = await websockets.connect(self.url, additional_headers={"Authorization": f"Bearer {self.api_key}"})
+        self._ws = await websockets.connect(
+            self.url,
+            additional_headers={"Authorization": f"Bearer {self.api_key}"},
+            ping_interval=20,
+            ping_timeout=20,
+        )
+
+    async def _close_raw_ws(self) -> None:
+        """Close the underlying websocket without sending sentinel or reconnecting."""
+        if not self._ws:
+            return
+        ws = self._ws
+        self._ws = None
+        try:
+            await ws.close()
+        except (ConnectionClosed, ConnectionClosedOK):
+            pass
+        except Exception as e:
+            logger.debug("Ignored error closing raw websocket: %s", e)
 
     async def _reconnect(self) -> bool:
         """
@@ -77,23 +100,16 @@ class AvatarTalkConnector:
         for attempt in range(1, self.max_reconnect_attempts + 1):
             try:
                 logger.info("Attempting to reconnect (attempt %d/%d)...", attempt, self.max_reconnect_attempts)
+                await self._close_raw_ws()
 
-                # Close existing connection if any
-                if self._ws:
-                    try:
-                        await self._ws.close()
-                    except (ConnectionClosed, ConnectionClosedOK):
-                        # Already closed, this is fine
-                        pass
-                    except Exception as e:
-                        # Log other errors but continue with reconnection
-                        logger.warning("Error closing existing websocket: %s", e)
-                    finally:
-                        self._ws = None
-
-                # Try to reconnect
-                self._ws = await websockets.connect(self.url, additional_headers={"Authorization": f"Bearer {self.api_key}"})
+                self._ws = await websockets.connect(
+                    self.url,
+                    additional_headers={"Authorization": f"Bearer {self.api_key}"},
+                    ping_interval=20,
+                    ping_timeout=20,
+                )
                 logger.info("Successfully reconnected to AvatarTalk websocket")
+                self.reconnected_event = True
                 self._is_reconnecting = False
                 return True
 
@@ -103,12 +119,50 @@ class AvatarTalkConnector:
                 if attempt < self.max_reconnect_attempts:
                     logger.info("Waiting %.1f seconds before retry...", backoff)
                     await asyncio.sleep(backoff)
-                    # Exponential backoff with max cap
                     backoff = min(backoff * 2, self.max_backoff)
 
         logger.error("Failed to reconnect after %d attempts", self.max_reconnect_attempts)
         self._is_reconnecting = False
         return False
+
+    async def restart(self) -> bool:
+        """Thread/task-safe restart of the websocket connection (used by healthcheck)."""
+        async with self._lock:
+            return await self._reconnect()
+
+    async def send_and_receive(self, text_content: str, timeout: float = 45.0) -> dict[str, Any]:
+        """
+        Atomically send text and wait for the server's audio_duration response.
+
+        If the connection drops during send or receive, reconnects and resends the payload
+        once so that `receive` never hangs waiting on a fresh socket that received no request.
+        """
+        payload = text_content.encode("utf-8")
+        async with self._lock:
+            for attempt in range(2):
+                try:
+                    if not self._ws:
+                        if not await self._reconnect():
+                            raise RuntimeError("WebSocket connection is not initialized and reconnect failed")
+                    await self._ws.send(payload)
+                    raw = await asyncio.wait_for(self._ws.recv(), timeout=timeout)
+                    return json.loads(raw)
+                except TimeoutError:
+                    logger.warning(
+                        "Timed out waiting %.1fs for AvatarTalk response (attempt %d/2); reconnecting...",
+                        timeout,
+                        attempt + 1,
+                    )
+                    if not await self._reconnect():
+                        raise RuntimeError("Failed to reconnect after receive timeout") from None
+                except (ConnectionClosed, ConnectionClosedOK) as e:
+                    logger.warning("WebSocket closed during send_and_receive (attempt %d/2): %s", attempt + 1, e)
+                    if not await self._reconnect():
+                        raise RuntimeError("Failed to reconnect to websocket") from e
+                except Exception as e:
+                    logger.exception("Unexpected error in send_and_receive: %s", e)
+                    raise
+            return {"audio_duration": 0.0}
 
     async def send(self, text_content: str) -> None:
         try:
@@ -117,9 +171,7 @@ class AvatarTalkConnector:
             await self._ws.send(text_content.encode("utf-8"))
         except (ConnectionClosed, ConnectionClosedOK) as e:
             logger.warning("WebSocket connection closed during send: %s", e)
-            # Attempt to reconnect
             if await self._reconnect():
-                # Retry the send after successful reconnection
                 await self._ws.send(text_content.encode("utf-8"))
             else:
                 raise RuntimeError("Failed to reconnect to websocket") from e
@@ -127,32 +179,19 @@ class AvatarTalkConnector:
             logger.exception("Error sending message: %s", e)
             raise
 
-    async def receive(self) -> dict[str, Any]:
-        while True:
-            try:
-                if not self._ws:
-                    raise RuntimeError("WebSocket connection is not initialized")
-                raw = await asyncio.wait_for(self._ws.recv(), timeout=5)
-                return json.loads(raw)
-            except TimeoutError:
-                logger.debug("No message received in 5 seconds, retrying...")
-                await asyncio.sleep(5)
-                continue
-            except (ConnectionClosed, ConnectionClosedOK) as e:
-                logger.warning("WebSocket connection closed during receive: %s", e)
-                # Attempt to reconnect
-                if await self._reconnect():
-                    logger.info("Reconnected successfully, continuing to receive...")
-                    continue
-                raise RuntimeError("Failed to reconnect to websocket") from e
-            except Exception as e:
-                logger.exception("Error receiving message: %s", e)
-                raise
+    async def receive(self, timeout: float = 45.0) -> dict[str, Any]:
+        if not self._ws:
+            raise RuntimeError("WebSocket connection is not initialized")
+        raw = await asyncio.wait_for(self._ws.recv(), timeout=timeout)
+        return json.loads(raw)
 
     async def close(self) -> None:
-        if not self._ws:
-            return
-        try:
-            await self.send("!!!Close!!!")
-        finally:
-            await self._ws.close()
+        async with self._lock:
+            if not self._ws:
+                return
+            try:
+                await asyncio.wait_for(self._ws.send(b"!!!Close!!!"), timeout=2.0)
+            except Exception as e:
+                logger.debug("Could not send close sentinel (socket likely already closed): %s", e)
+            finally:
+                await self._close_raw_ws()

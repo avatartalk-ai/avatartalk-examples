@@ -96,13 +96,13 @@ class ChatHandler:
                 lambda: self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
-                    max_tokens=200,
+                    max_tokens=90,
                     temperature=0.7,
                 ),
             )
 
             response_text = response.choices[0].message.content.strip()
-            logger.info("Generated chat response: %s", response_text[:100])
+            logger.info("Generated chat response (%d chars): %s", len(response_text), response_text[:100])
             self.context_store.add_interaction(user_message, response_text)
 
             return response_text
@@ -113,7 +113,7 @@ class ChatHandler:
 
     async def process_comment(self, comment: dict[str, Any]) -> str | None:
         """
-        Process a YouTube comment and generate a response.
+        Process a single YouTube comment and generate a response.
 
         Args:
             comment: Comment dict with 'text', 'author', 'timestamp'
@@ -122,17 +122,40 @@ class ChatHandler:
             Generated response
 
         """
-        text = comment.get("text", "").strip()
-        author = comment.get("author", "Unknown")
+        return await self.process_comments_batch([comment])
 
-        if not text:
+    async def process_comments_batch(self, comments: list[dict[str, Any]]) -> str | None:
+        """
+        Process a batch of YouTube comments in O(1) OpenAI/YouTube calls so queues never grow.
+
+        Stores up to the latest 10 comments in context_store and generates a single concise
+        reply (<= 190 chars) addressing the latest/most relevant viewer messages.
+        """
+        valid_comments = []
+        for c in comments[-10:]:
+            text = (c.get("text") or "").strip()
+            if text:
+                author = c.get("author", "Viewer")
+                self.context_store.add_chat_message(author, text)
+                valid_comments.append((author, text, c.get("timestamp")))
+
+        if not valid_comments:
             return None
 
-        # Add to context store
+        if len(valid_comments) == 1:
+            author, text, ts = valid_comments[0]
+            combined_text = f"{author}: {text}"
+        else:
+            lines = [f"{author}: {text}" for author, text, _ in valid_comments[-5:]]
+            combined_text = (
+                "Multiple viewers just wrote in chat. Reply with ONE short message (under 180 characters) "
+                "that addresses the main question(s) or acknowledges them together:\n" + "\n".join(lines)
+            )
+            author, _, ts = valid_comments[-1]
+
         chat_message = ChatMessage(
             author=author,
-            text=text,
-            timestamp=comment.get("timestamp"),
+            text=combined_text,
+            timestamp=ts,
         )
-        self.context_store.add_chat_message(author, text)
         return await self.generate_response(chat_message)

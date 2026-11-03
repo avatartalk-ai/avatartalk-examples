@@ -32,35 +32,10 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Parse arguments
-if [ $# -lt 2 ]; then
-    log_error "Usage: $0 <video_id> <language> [background_url]"
-    echo ""
-    echo "Arguments:"
-    echo "  video_id       - YouTube video ID (required)"
-    echo "  language       - Stream language code, e.g., 'en', 'es', 'fr' (required)"
-    echo "  background_url - Optional background image URL"
-    echo ""
-    echo "Example:"
-    echo "  $0 dQw4w9WgXcQ en"
-    echo "  $0 dQw4w9WgXcQ es https://example.com/background.png"
-    exit 2
-fi
-
-VIDEO_ID="$1"
-LANGUAGE="$2"
+# Parse arguments (video_id and language are optional; defaults to auto-detect and 'en')
+VIDEO_ID="${1:-}"
+LANGUAGE="${2:-en}"
 BACKGROUND_URL="${3:-}"
-
-# Validate inputs
-if [ -z "$VIDEO_ID" ]; then
-    log_error "Video ID cannot be empty"
-    exit 2
-fi
-
-if [ -z "$LANGUAGE" ]; then
-    log_error "Language cannot be empty"
-    exit 2
-fi
 
 log_info "Starting AvatarTalk YouTube Streamer in infinite restart mode"
 log_info "Video ID: $VIDEO_ID"
@@ -79,8 +54,11 @@ trap 'log_warning "Received SIGTERM, shutting down..."; exit 143' TERM
 
 # Main loop
 while true; do
-    # Build command with optional background URL
-    CMD_ARGS=("$VIDEO_ID" "--language" "$LANGUAGE")
+    # Build command with optional video ID and background URL
+    CMD_ARGS=("--language" "$LANGUAGE")
+    if [ -n "$VIDEO_ID" ]; then
+        CMD_ARGS=("$VIDEO_ID" "${CMD_ARGS[@]}")
+    fi
 
     if [ -n "$BACKGROUND_URL" ]; then
         CMD_ARGS+=("--background-url" "$BACKGROUND_URL")

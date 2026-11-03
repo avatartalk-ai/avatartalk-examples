@@ -37,6 +37,8 @@ class Settings:
     host: str = os.getenv("APP_HOST", "127.0.0.1")
     port: int = int(os.getenv("APP_PORT", "8000"))
     debug: bool = _get_bool("APP_DEBUG", True)
+    # Path prefix the app is served under (e.g. "/simple-webchat"); empty when served at the root.
+    root_path: str = os.getenv("ROOT_PATH", "").rstrip("/")
 
 
 settings = Settings()

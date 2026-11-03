@@ -7,6 +7,7 @@ import signal
 import sys
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from functools import partial
 
@@ -30,7 +31,8 @@ from livestream.youtube import YouTubeCommentManager
 logger = logging.getLogger(__name__)
 
 SECONDS_UNTIL_REFRESH = 180
-IDLE_WAIT_SECONDS = 5
+IDLE_WAIT_SECONDS = 10
+MAX_IDLE_WAIT_SECONDS = 15
 BUSY_WAIT_SECONDS = 5
 LANGUAGE_MAP = {
     "en": "English",
@@ -95,12 +97,13 @@ class AvatarTalkStreamer:
 
         self.topics_file = AVATARTALK_TOPICS_FILE
         self.shutdown_requested = False
+        self._shutdown_event: asyncio.Event | None = None
         self.room_name = "avatartalk-live"
         self.youtube_live_id = live_id
         self.stream_language = language
         self.voice_id = voice_id
-        # Cooldown to avoid overlapping segments while previous audio plays
-        self.remaining_duration_to_play = 10
+        # Cooldown lead time (seconds before current segment ends to start generating the next one)
+        self.remaining_duration_to_play = 4
         self.stream_key = stream_key or YOUTUBE_STREAM_KEY
         self.avatar_name = avatar_name
         self.skip_welcome = skip_welcome
@@ -114,34 +117,20 @@ class AvatarTalkStreamer:
         # Rolling context for avatar narration - keep last 2 segments only
         # Using deque with maxlen to prevent unbounded growth
         self.narration_history: deque = deque(maxlen=2)
+        self.recent_topics: deque[str] = deque(maxlen=10)
 
         # Load topics
         logger.debug("Loading topics from %s...", self.topics_file)
         self.topics = self._load_topics()
 
-        logger.debug("Creating AvatarTalk connector...")
-        self.avatartalk_connector = AvatarTalkConnector(
-            url=AVATARTALK_URL,
-            api_key=AVATARTALK_API_KEY,
-            avatar=self.avatar_name,
-            language=self.stream_language,
-            rtmp_url=YOUTUBE_RTMP_URL,
-            straem_key=self.stream_key,
-            background_url=background_url or AVATARTALK_DEFAULT_BACKGROUND_URL,
-        )
-        logger.debug("GeneFace connector created")
-
         # System prompts - separate for chat and narration
-        # Map language code to full language name
         language_full = LANGUAGE_MAP.get(self.stream_language, "English")
         logger.debug("Language mapping: %s -> %s", self.stream_language, language_full)
 
-        # Create narration system prompt from template
         logger.debug("Loading narration system prompt...")
         self.narration_system_prompt = self._create_narration_system_prompt(language_full)
         logger.debug("Narration system prompt loaded")
 
-        # Chat handler for direct Q&A - uses same teacher persona as narration
         logger.debug("Initializing chat handler...")
         self.chat_handler = ChatHandler(
             self.client,
@@ -151,19 +140,41 @@ class AvatarTalkStreamer:
         )
         logger.debug("Chat handler initialized")
 
-        # Set up YouTube comment manager
-        youtube_api_key = YOUTUBE_API_KEY
-        if youtube_api_key:
-            logger.debug("Initializing YouTube comment manager...")
-            self.youtube_manager = YouTubeCommentManager(youtube_api_key)
-            logger.debug("Setting up YouTube stream...")
-            self._setup_youtube_stream()
-        else:
-            logger.critical("YOUTUBE_API_KEY not provided in environment")
-            sys.exit(1)
+        # Set up YouTube comment manager (uses OAuth2 credentials; YOUTUBE_API_KEY is optional)
+        logger.debug("Initializing YouTube comment manager...")
+        self.youtube_manager = YouTubeCommentManager(YOUTUBE_API_KEY, openai_client=self.client)
+
+        # Ensure we have a valid active/ready broadcast and RTMP stream key
+        ensured_id, ensured_rtmp_url, ensured_stream_key = self.youtube_manager.ensure_live_broadcast(
+            video_id=self.youtube_live_id,
+            language=self.stream_language,
+        )
+        self.youtube_live_id = ensured_id
+        self.rtmp_url = YOUTUBE_RTMP_URL or ensured_rtmp_url or "rtmp://a.rtmp.youtube.com/live2"
+        self.stream_key = self.stream_key or ensured_stream_key
+
+        logger.debug("Creating AvatarTalk connector...")
+        self.avatartalk_connector = AvatarTalkConnector(
+            url=AVATARTALK_URL,
+            api_key=AVATARTALK_API_KEY,
+            avatar=self.avatar_name,
+            language=self.stream_language,
+            rtmp_url=self.rtmp_url,
+            stream_key=self.stream_key,
+            background_url=background_url or AVATARTALK_DEFAULT_BACKGROUND_URL,
+        )
+        logger.debug("AvatarTalk connector created")
+
+        logger.debug("Setting up YouTube stream...")
+        self._setup_youtube_stream()
 
         self.last_comment_check = time.time()
         self.last_connector_restart = time.time()
+
+        # Dedicated single-thread executor for all YouTube API calls.
+        # googleapiclient uses httplib2 internally which is NOT thread-safe;
+        # serializing through one thread prevents concurrent access.
+        self._yt_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="yt-api")
 
         logger.info("AvatarTalkStreamer initialization complete")
 
@@ -211,6 +222,14 @@ class AvatarTalkStreamer:
         except Exception as e:
             logger.error("Error closing AvatarTalk connector: %s", e)
 
+        # Shut down the YouTube API executor
+        try:
+            if hasattr(self, "_yt_executor") and self._yt_executor:
+                self._yt_executor.shutdown(wait=False)
+                logger.debug("YouTube API executor shut down")
+        except Exception as e:
+            logger.error("Error shutting down YouTube API executor: %s", e)
+
         logger.info("AvatarTalkStreamer resources closed")
 
     def _create_narration_system_prompt(self, language: str) -> str:
@@ -231,14 +250,14 @@ class AvatarTalkStreamer:
         """Setup YouTube live stream detection."""
         if not self.youtube_manager:
             logger.warning("YouTube manager not initialized")
-            return
+            return None
 
         try:
             # Try to get live stream ID from environment or auto-detect
             live_id = self.youtube_live_id
             if not live_id:
                 logger.info("No live ID provided, attempting auto-detection...")
-                live_id = self.youtube_manager.find_live_stream()
+                live_id = self.youtube_manager.find_live_stream(language=self.stream_language)
                 if live_id:
                     logger.info("Auto-detected live stream ID: %s", live_id)
 
@@ -247,16 +266,16 @@ class AvatarTalkStreamer:
                 live_chat_id = self.youtube_manager.get_live_chat_id(live_id)
                 if live_chat_id:
                     logger.info("Successfully connected to live chat: %s", live_chat_id)
-                else:
-                    logger.warning("Could not get live chat ID for stream %s", live_id)
-            else:
-                logger.warning("No live stream found, comment integration will be limited")
-                return
+                    return live_chat_id
+                logger.warning("Could not get live chat ID for stream %s", live_id)
+                return None
+            logger.warning("No live stream found, comment integration will be limited")
+            return None
         except Exception as e:
             logger.error("Error setting up YouTube stream: %s", e)
             logger.exception("Full traceback:")
             # Don't raise - allow initialization to continue without YouTube integration
-            return
+            return None
 
     def _load_topics(self) -> list[str]:
         """Load topics from file - file must exist."""
@@ -276,10 +295,18 @@ class AvatarTalkStreamer:
             logger.exception("Could not read %s: %s", self.topics_file, e)
             sys.exit(1)
 
+    def _pick_random_topic(self) -> str:
+        """Pick a random topic avoiding recently used ones."""
+        available = [t for t in self.topics if t not in self.recent_topics] or self.topics
+        chosen = random.choice(available)
+        self.recent_topics.append(chosen)
+        return chosen
+
     def _create_user_prompt(self, topic: str) -> str:
-        """Create user prompt for the given topic with randomized word count."""
-        word_count = random.randint(60, 90)
-        return f"Produce ONE continuous segment in {LANGUAGE_MAP[self.stream_language]} about: {topic}. Aim for ~{word_count} words. End with a single-sentence question to the live chat."
+        """Create user prompt for the given topic with concise word count."""
+        word_count = random.randint(35, 50)
+        language_name = LANGUAGE_MAP.get(self.stream_language, "English")
+        return f"Produce ONE concise segment in {language_name} about: {topic}. Strictly {word_count} words max (3-4 short sentences). End with a quick question to the live chat."
 
     def _build_messages(self, user_prompt: str) -> list[dict[str, str]]:
         """
@@ -324,7 +351,7 @@ class AvatarTalkStreamer:
 
         try:
             response = self.client.chat.completions.create(
-                model=self.model, messages=messages, max_tokens=200, temperature=0.8
+                model=self.model, messages=messages, max_tokens=120, temperature=0.8
             )
 
             segment = response.choices[0].message.content.strip()
@@ -343,7 +370,20 @@ class AvatarTalkStreamer:
         logger.warning("Received interrupt signal (signal %d). Initiating graceful shutdown...", signum)
         logger.info("Setting shutdown_requested flag to stop all loops")
         self.shutdown_requested = True
+        if self._shutdown_event is not None:
+            self._shutdown_event.set()
         logger.info("Shutdown flag set. Waiting for tasks to complete...")
+
+    async def _sleep_or_shutdown(self, seconds: float) -> bool:
+        """Sleep for `seconds` or return True immediately if shutdown is requested."""
+        if self.shutdown_requested:
+            return True
+        if self._shutdown_event is None:
+            await asyncio.sleep(seconds)
+            return self.shutdown_requested
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(self._shutdown_event.wait(), timeout=max(0.0, seconds))
+        return self.shutdown_requested
 
     async def _play_segment(self, segment: str) -> float:
         """Send the segment to the connector and return audio duration (seconds)."""
@@ -351,9 +391,8 @@ class AvatarTalkStreamer:
         print(segment)
         print()
 
-        await self.avatartalk_connector.send(segment)
-        logger.debug("Waiting for response from AvatarTalk API...")
-        audio_info = await self.avatartalk_connector.receive()
+        logger.debug("Sending segment and waiting for response from AvatarTalk API...")
+        audio_info = await self.avatartalk_connector.send_and_receive(segment)
         duration = float(audio_info.get("audio_duration", 0.0))
         logger.info("Segment duration: %.2fs", duration)
         return duration
@@ -380,18 +419,22 @@ class AvatarTalkStreamer:
 
         while not self.shutdown_requested:
             try:
-                if not self.youtube_manager.live_chat_id and not self._setup_youtube_stream():
-                    logger.warning(f"Still not able to get Live Chat ID, waiting {IDLE_WAIT_SECONDS}")
-                    await asyncio.sleep(IDLE_WAIT_SECONDS)
-                    continue
+                if not self.youtube_manager.live_chat_id:
+                    await loop.run_in_executor(self._yt_executor, self._setup_youtube_stream)
+                    if not self.youtube_manager.live_chat_id:
+                        logger.warning(f"Still not able to get Live Chat ID, waiting {IDLE_WAIT_SECONDS}")
+                        if await self._sleep_or_shutdown(IDLE_WAIT_SECONDS):
+                            break
+                        continue
 
-                await asyncio.sleep(wait_time)
+                if await self._sleep_or_shutdown(wait_time):
+                    break
                 logger.debug("Chat loop: fetching comments (polling interval: %.2fs)...", wait_time)
 
-                # Run blocking YouTube API call in executor with timeout
+                # Run blocking YouTube API call in dedicated executor with timeout
                 try:
                     comments = await asyncio.wait_for(
-                        loop.run_in_executor(None, self.youtube_manager.get_recent_comments),
+                        loop.run_in_executor(self._yt_executor, self.youtube_manager.get_recent_comments),
                         timeout=10.0,
                     )
                 except TimeoutError:
@@ -404,38 +447,46 @@ class AvatarTalkStreamer:
                 if not comments:
                     logger.debug("Chat loop: no new comments")
                     iteration += 1
-                    if iteration == 5:
-                        logger.warning(
-                            "No chat messages for 25 seconds, clearing the context and changing into idle mode"
+                    if iteration >= 30:
+                        wait_time = max(youtube_poll_seconds, MAX_IDLE_WAIT_SECONDS)
+                    elif iteration >= 6:
+                        wait_time = max(youtube_poll_seconds, IDLE_WAIT_SECONDS)
+                    if (
+                        iteration * IDLE_WAIT_SECONDS >= SECONDS_UNTIL_REFRESH
+                        and self.chat_handler.context_store.get_recent_chat_messages(count=1)
+                    ):
+                        logger.info(
+                            "No chat messages for %d seconds, clearing context store",
+                            SECONDS_UNTIL_REFRESH,
                         )
                         self.chat_handler.context_store.clear()
-                        wait_time = max(youtube_poll_seconds, IDLE_WAIT_SECONDS)
                     continue
 
-                logger.info("Processing %d new comments in chat loop", len(comments))
+                logger.info("Processing %d new comments in chat loop (batched)", len(comments))
                 iteration = 0
                 wait_time = max(youtube_poll_seconds, BUSY_WAIT_SECONDS)
                 logger.info(f"Polling interval: {wait_time:.2f}s")
 
-                # Process each comment
-                for comment in comments:
-                    try:
-                        response = await self.chat_handler.process_comment(comment)
+                # Process all new comments as a single batch so the chat queue never grows
+                try:
+                    response = await self.chat_handler.process_comments_batch(comments)
 
-                        if response:
-                            logger.info("Sending chat response: %s", response[:100])
-                            try:
-                                await asyncio.wait_for(
-                                    loop.run_in_executor(None, self.youtube_manager.send_chat_message, response),
-                                    timeout=10.0,
-                                )
-                                logger.debug("Chat response sent successfully")
-                            except TimeoutError:
-                                logger.warning("Chat loop: send_chat_message() timed out after 10s")
-                            except Exception as e:
-                                logger.exception("Failed to send chat message: %s", e)
-                    except Exception as e:
-                        logger.exception("Error processing comment: %s", e)
+                    if response:
+                        logger.info("Sending chat response: %s", response[:100])
+                        try:
+                            await asyncio.wait_for(
+                                loop.run_in_executor(
+                                    self._yt_executor, self.youtube_manager.send_chat_message, response
+                                ),
+                                timeout=10.0,
+                            )
+                            logger.debug("Chat response sent successfully")
+                        except TimeoutError:
+                            logger.warning("Chat loop: send_chat_message() timed out after 10s")
+                        except Exception as e:
+                            logger.exception("Failed to send chat message: %s", e)
+                except Exception as e:
+                    logger.exception("Error processing comment batch: %s", e)
 
             except KeyboardInterrupt:
                 logger.info("Chat loop interrupted by user")
@@ -475,7 +526,8 @@ class AvatarTalkStreamer:
                 logger.info("Checking if bot has already posted messages to chat...")
 
                 has_posted = await loop.run_in_executor(
-                    None, partial(self.youtube_manager.check_for_bot_messages, search_text=None, max_messages=30)
+                    self._yt_executor,
+                    partial(self.youtube_manager.check_for_bot_messages, search_text=None, max_messages=30),
                 )
 
                 if has_posted:
@@ -492,64 +544,72 @@ class AvatarTalkStreamer:
         # If skip_welcome is enabled (explicit or auto-detected), wait before generating first segment
         if should_skip_welcome and not self._welcome_skip_complete:
             logger.info("Skip welcome mode: waiting 60 seconds before starting narration...")
-            await asyncio.sleep(60)
+            if await self._sleep_or_shutdown(60):
+                return
             self._welcome_skip_complete = True
             logger.info("Welcome skip period complete, starting narration")
 
-        cooldown_remaining = 0.0
+        # Track monotonic time when current queued audio playback finishes on the server
+        playback_ends_at = time.monotonic()
+        last_narrated_message_ts: datetime | None = None
 
         while not self.shutdown_requested:
-            if cooldown_remaining >= self.remaining_duration_to_play:
-                await asyncio.sleep(1)
-                cooldown_remaining -= 1
+            if self.avatartalk_connector.reconnected_event:
+                logger.info("WebSocket reconnected — resetting playback schedule to play immediately")
+                self.avatartalk_connector.reconnected_event = False
+                playback_ends_at = time.monotonic()
+
+            now = time.monotonic()
+            remaining_playback = max(0.0, playback_ends_at - now)
+            if remaining_playback > self.remaining_duration_to_play:
+                wait_for = min(2.0, remaining_playback - self.remaining_duration_to_play)
+                if await self._sleep_or_shutdown(wait_for):
+                    break
                 continue
 
             try:
-                start_processing = time.time()
-
                 recent_messages = self.context_store.get_recent_chat_messages(count=10)
 
-                chat_is_fresh = False
-                if recent_messages:
-                    # Check the timestamp of the most recent message
-                    latest_message = recent_messages[-1]
-                    time_since_last_message = (datetime.now(UTC) - latest_message.timestamp).total_seconds()
-                    chat_is_fresh = time_since_last_message < SECONDS_UNTIL_REFRESH  # 3 minutes
+                unseen_messages = [
+                    msg
+                    for msg in recent_messages
+                    if (last_narrated_message_ts is None or msg.timestamp > last_narrated_message_ts)
+                    and (datetime.now(UTC) - msg.timestamp).total_seconds() < SECONDS_UNTIL_REFRESH
+                ]
 
-                    if not chat_is_fresh:
-                        logger.info(
-                            "Last chat message was %.1f minutes ago, using random topic", time_since_last_message / 60
-                        )
-
-                # If we have fresh chat activity, try to generate a topic from it
-                if chat_is_fresh:
-                    # Create a summary of recent messages for topic selection
+                # If we have new, unnarrated chat activity, generate a topic from it once
+                if unseen_messages:
+                    last_narrated_message_ts = unseen_messages[-1].timestamp
                     try:
                         topic = await loop.run_in_executor(
-                            None,
+                            self._yt_executor,
                             self.youtube_manager.summarize_comments,
-                            [{"author": msg.author, "text": msg.text} for msg in recent_messages[-5:]],
+                            [{"author": msg.author, "text": msg.text} for msg in unseen_messages[-5:]],
                         )
-                        logger.info("Using topic from recent chat context: %s", topic)
+                        logger.info("Using topic from new chat messages: %s", topic)
                     except Exception:
                         logger.warning("Failed to summarize recent chat, using random topic")
-                        topic = random.choice(self.topics)
+                        topic = self._pick_random_topic()
                 else:
-                    # No recent chat activity or chat is stale, use random topic
-                    topic = random.choice(self.topics)
-                    logger.info("No fresh chat activity, using random topic: %s", topic)
+                    # No new unnarrated chat messages, pick a fresh random topic
+                    topic = self._pick_random_topic()
+                    logger.info("No new chat messages since last narration, using topic: %s", topic)
 
                 segment = await loop.run_in_executor(None, self._generate_segment, topic)
 
-                text_generation_time = time.time() - start_processing
-
                 if not segment:
                     logger.warning("Segment generation failed; retrying soon...")
-                    await asyncio.sleep(3.0)
+                    if await self._sleep_or_shutdown(3.0):
+                        break
                     continue
 
                 duration = await self._play_segment(segment)
-                cooldown_remaining += duration - text_generation_time
+                now_after_send = time.monotonic()
+                if self.avatartalk_connector.reconnected_event:
+                    self.avatartalk_connector.reconnected_event = False
+                    playback_ends_at = now_after_send + duration
+                else:
+                    playback_ends_at = max(now_after_send, playback_ends_at) + duration
 
             except KeyboardInterrupt:
                 logger.info("Narration loop interrupted")
@@ -582,14 +642,15 @@ class AvatarTalkStreamer:
         logger.info("Healthcheck loop started")
 
         loop = asyncio.get_event_loop()
-        check_interval = 30  # Check every 30 seconds
+        check_interval = 45  # Check every 45 seconds to conserve YouTube API quota
         restart_cooldown = 60  # Wait 60 seconds after restart before checking again
 
         _iteration = 0
         while not self.shutdown_requested:
             try:
                 # Wait for the check interval
-                await asyncio.sleep(check_interval)
+                if await self._sleep_or_shutdown(check_interval):
+                    break
 
                 # Check if we're still in cooldown period after a restart
                 time_since_restart = time.time() - self.last_connector_restart
@@ -598,10 +659,10 @@ class AvatarTalkStreamer:
                     logger.debug("Healthcheck: in cooldown period, %.1f seconds remaining", remaining)
                     continue
 
-                # Check stream status (run in executor to avoid blocking)
+                # Check stream status (run in dedicated executor to avoid blocking)
                 try:
                     status = await asyncio.wait_for(
-                        loop.run_in_executor(None, self.youtube_manager.get_stream_status, self.youtube_live_id),
+                        loop.run_in_executor(self._yt_executor, self.youtube_manager.get_stream_status, self.youtube_live_id),
                         timeout=10.0,
                     )
                 except TimeoutError:
@@ -615,24 +676,11 @@ class AvatarTalkStreamer:
                         logger.warning(
                             "Healthcheck: Stream status 'noData' persisted for 5 checks, restarting AvatarTalk connector"
                         )
-
-                        # Close existing connector
-                        try:
-                            await self.avatartalk_connector.close()
-                            logger.info("Healthcheck: Closed existing connector")
-                        except Exception as e:
-                            logger.exception("Healthcheck: Error closing connector: %s", e)
-
-                        # Reinitialize connector
-                        try:
-                            await self.avatartalk_connector.initialize()
+                        if await self.avatartalk_connector.restart():
                             logger.info("Healthcheck: Successfully restarted connector")
                             self.last_connector_restart = time.time()
-                        except Exception as e:
-                            logger.exception("Healthcheck: Error reinitializing connector: %s", e)
-                            # Continue loop to try again later
-                            continue
-
+                        else:
+                            logger.error("Healthcheck: Failed to restart connector; will retry later")
                         _iteration = 0
                 else:
                     if _iteration > 0:
@@ -654,6 +702,7 @@ class AvatarTalkStreamer:
         2. Avatar narration - generates topic-based segments with full context
         """
         try:
+            self._shutdown_event = asyncio.Event()
             logger.info("Initializing AvatarTalk connector...")
             await self.avatartalk_connector.initialize()
             logger.info("AvatarTalk connector initialized successfully")

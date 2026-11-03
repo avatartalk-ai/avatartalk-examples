@@ -47,7 +47,7 @@ export class AvatarTalkConnector {
     if (!this.apiKey) throw new Error('AVATARTALK_API_KEY is required');
     await new Promise((resolve, reject) => {
       const ws = new WebSocket(this.url, {
-        headers: { 'X-API-Key': this.apiKey },
+        headers: { Authorization: `Bearer ${this.apiKey}` },
         perMessageDeflate: false,
       });
       let settled = false;
@@ -70,11 +70,15 @@ export class AvatarTalkConnector {
     // similar to the Python loop with a 5s timeout between tries.
     for (; ;) {
       const msg = await waitForMessage(this._ws, timeoutMs, this.logger);
+      if (msg === null) {
+        await new Promise((r) => setTimeout(r, 5000));
+        continue;
+      }
       try {
         const parsed = JSON.parse(msg.toString('utf8'));
         return parsed;
       } catch (e) {
-        this.logger.debug('Non-JSON or timeout from AvatarTalk; retrying');
+        this.logger.debug('Non-JSON message from AvatarTalk; retrying');
         await new Promise((r) => setTimeout(r, 5000));
       }
     }
@@ -101,8 +105,7 @@ function waitForMessage(ws, timeoutMs, logger) {
     const onTimeout = () => {
       cleanup();
       logger?.debug?.('No message received within timeout; retrying soon');
-      // Return an empty object to keep loop semantics similar to Python
-      resolve(Buffer.from('{}', 'utf8'));
+      resolve(null);
     };
     const cleanup = () => {
       ws.off('message', onMessage);

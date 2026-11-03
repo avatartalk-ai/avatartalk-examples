@@ -9,6 +9,7 @@ YOUTUBE_STREAM_KEY = os.getenv("YOUTUBE_STREAM_KEY")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 YOUTUBE_LIVE_ID = os.getenv("YOUTUBE_LIVE_ID")
 GOOGLE_CLIENT_SECRETS_PATH = os.getenv("GOOGLE_CLIENT_SECRETS_PATH")
+GOOGLE_TOKEN_PATH = os.getenv("GOOGLE_TOKEN_PATH", "token.json")
 LIVEKIT_URL = os.getenv("LIVEKIT_URL")
 LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY")
 LIVEKIT_SECRET = os.getenv("LIVEKIT_API_SECRET")
@@ -24,8 +25,5 @@ AVATARTALK_PROMPT_PATH = os.getenv("AVATARTALK_PROMPT_PATH")
 AVATARTALK_MODEL = os.getenv("AVATARTALK_MODEL", "gpt-4o-mini")
 AVATARTALK_TOPICS_FILE = os.getenv("AVATARTALK_TOPICS_FILE", "topics.txt")
 
-# GeneFace
+# GeneFace (optional legacy setting)
 GENEFACE_URL = os.getenv("GENEFACE_URL")
-
-if not GENEFACE_URL:
-    raise ValueError("GeneFace URL not provided!")

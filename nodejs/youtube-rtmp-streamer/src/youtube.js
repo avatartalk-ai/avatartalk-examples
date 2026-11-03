@@ -30,19 +30,47 @@ export class YouTubeCommentManager {
     }
 
     const SCOPES = ['https://www.googleapis.com/auth/youtube', 'https://www.googleapis.com/auth/youtube.force-ssl'];
+    const tokenPath = process.env.GOOGLE_TOKEN_PATH || 'token.json';
 
     const credentials = JSON.parse(fs.readFileSync(this.secretsPath, 'utf8'));
+    const clientConfig = credentials.installed || credentials.web;
+    if (!clientConfig) {
+      throw new Error('Invalid OAuth credentials file: missing "installed" or "web" section');
+    }
+
+    if (fs.existsSync(tokenPath)) {
+      try {
+        const savedTokens = JSON.parse(fs.readFileSync(tokenPath, 'utf8'));
+        const oauth2Client = new google.auth.OAuth2(
+          clientConfig.client_id,
+          clientConfig.client_secret,
+          (clientConfig.redirect_uris && clientConfig.redirect_uris[0]) || 'http://localhost'
+        );
+        oauth2Client.setCredentials(savedTokens);
+        oauth2Client.on('tokens', (newTokens) => {
+          const merged = { ...savedTokens, ...newTokens };
+          fs.writeFileSync(tokenPath, JSON.stringify(merged, null, 2), 'utf8');
+        });
+        await oauth2Client.getAccessToken();
+        this.youtube = google.youtube({ version: 'v3', auth: oauth2Client });
+        this.logger.info('OAuth2 authorization loaded/refreshed from token.json');
+        return;
+      } catch (e) {
+        this.logger.warn(`Failed to reuse saved token (${e?.message || e}), starting interactive OAuth flow...`);
+      }
+    }
 
     // Start local server and get auth code
-    const { code, oauth2Client } = await this.#runLocalServer(credentials, SCOPES);
+    const { code, oauth2Client } = await this.#runLocalServer(clientConfig, SCOPES);
     const { tokens } = await oauth2Client.getToken(code);
     oauth2Client.setCredentials(tokens);
+    fs.writeFileSync(tokenPath, JSON.stringify(tokens, null, 2), 'utf8');
 
     this.youtube = google.youtube({ version: 'v3', auth: oauth2Client });
     this.logger.info('OAuth2 authorization successful');
   }
 
-  async #runLocalServer(credentials, scopes) {
+  async #runLocalServer(clientConfig, scopes) {
     const http = await import('http');
     const { parse } = await import('url');
     const { exec } = await import('child_process');
@@ -80,8 +108,8 @@ export class YouTubeCommentManager {
 
         // Create OAuth2 client with the actual port
         oauth2Client = new google.auth.OAuth2(
-          credentials.installed.client_id,
-          credentials.installed.client_secret,
+          clientConfig.client_id,
+          clientConfig.client_secret,
           redirectUrl
         );
 

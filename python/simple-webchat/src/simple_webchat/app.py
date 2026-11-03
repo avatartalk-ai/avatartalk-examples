@@ -17,7 +17,8 @@ from .openai_client import chat_complete, transcribe_audio_bytes
 from .avatartalk_client import inference, AvatarTalkError
 
 
-app = FastAPI(title="AvatarTalk Simple WebChat")
+# ROOT_PATH lets the app run under a path prefix, e.g. /simple-webchat behind a reverse proxy.
+app = FastAPI(title="AvatarTalk Simple WebChat", root_path=settings.root_path)
 
 TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -67,6 +68,7 @@ def index(request: Request) -> HTMLResponse:
             "emotion": settings.emotion,
             "language": settings.language,
             "delayed": settings.delayed,
+            "root_path": settings.root_path,
         },
     )
 
@@ -206,7 +208,7 @@ async def chat_stream(payload: Dict[str, Any]) -> JSONResponse:
     return JSONResponse({
         "assistant_text": assistant_text,
         "stream_id": sid,
-        "stream_url": f"/stream/{sid}.mp4",
+        "stream_url": f"{settings.root_path}/stream/{sid}.mp4",
     })
 
 

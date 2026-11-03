@@ -5,10 +5,20 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 
-from livestream.config import YOUTUBE_LIVE_ID
+from livestream.config import AVATARTALK_AVATAR, AVATARTALK_LANGUAGE, YOUTUBE_LIVE_ID, YOUTUBE_STREAM_KEY
 from livestream.core import AvatarTalkStreamer
+
+
+def _load_optional_json_mapping(filename: str, key: str) -> str | None:
+    """Load a language-keyed value from an optional JSON file if it exists."""
+    if not os.path.exists(filename):
+        return None
+    with open(filename, encoding="utf-8") as f:
+        data = json.load(f)
+    return data.get(key)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -20,8 +30,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="YouTube Live video ID. Falls back to $YOUTUBE_LIVE_ID if omitted.",
     )
     parser.add_argument("--background-url", type=str, default=None, help="Background image URL")
-    parser.add_argument("--language", type=str, default="en", help="Language to use in stream")
-    parser.add_argument("--stream-key", type=str, help="Stream key to use")
+    parser.add_argument(
+        "--language",
+        type=str,
+        default=AVATARTALK_LANGUAGE or "en",
+        help="Language to use in stream (default: $AVATARTALK_LANGUAGE or 'en')",
+    )
+    parser.add_argument("--stream-key", type=str, default=None, help="YouTube RTMP stream key (overrides env/json)")
+    parser.add_argument("--avatar", type=str, default=None, help="AvatarTalk avatar name (overrides env/json)")
     parser.add_argument(
         "--log-level",
         default="INFO",
@@ -50,48 +66,25 @@ def main(argv: list[str] | None = None) -> int:
 
     video_id = args.video_id or YOUTUBE_LIVE_ID
     if not video_id:
-        logger.critical("No video ID provided. Pass it as an argument or set $YOUTUBE_LIVE_ID.")
-        print(
-            "Error: no video ID provided. Pass it as an argument or set $YOUTUBE_LIVE_ID.",
-            file=sys.stderr,
-        )
-        return 2
+        logger.info("No video ID passed via CLI/env — will auto-detect or create a broadcast via YouTube OAuth.")
 
     try:
-        # load voice ID
-        logger.debug("Loading voices.json")
-        with open("voices.json") as f:
-            voices = json.load(f)
-
-        if args.language not in voices:
-            logger.critical("No voice ID for language '%s' in voices.json", args.language)
-            raise ValueError(f"No voice ID for `{args.language}` language")
-
-        voice_id = voices[args.language]
+        voice_id = _load_optional_json_mapping("voices.json", args.language) or "default"
         logger.debug("Voice ID: %s", voice_id)
 
-        # load stream key
-        logger.debug("Loading stream_keys.json")
-        with open("stream_keys.json") as f:
-            stream_keys = json.load(f)
+        stream_key = (
+            args.stream_key
+            or _load_optional_json_mapping("stream_keys.json", args.language)
+            or YOUTUBE_STREAM_KEY
+            or ""
+        )
 
-        if args.language not in stream_keys:
-            logger.critical("No stream key for language '%s' in stream_keys.json", args.language)
-            raise ValueError(f"No stream key for `{args.language}` language")
-
-        stream_key = stream_keys[args.language]
-        logger.debug("Stream key loaded successfully")
-
-        # load avatar name
-        logger.debug("Loading avatars.json")
-        with open("avatars.json") as f:
-            avatars = json.load(f)
-
-        if args.language not in avatars:
-            logger.critical("No avatar name for language '%s' in avatars.json", args.language)
-            raise ValueError(f"No avatar name for `{args.language}` language")
-
-        avatar_name = avatars[args.language]
+        avatar_name = (
+            args.avatar
+            or _load_optional_json_mapping("avatars.json", args.language)
+            or AVATARTALK_AVATAR
+            or "european_woman"
+        )
         logger.debug("Avatar name: %s", avatar_name)
 
         logger.info("Initializing AvatarTalkStreamer")
