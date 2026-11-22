@@ -6,9 +6,9 @@ import argparse
 import json
 import logging
 import os
-import sys
 
-from livestream.config import AVATARTALK_AVATAR, AVATARTALK_LANGUAGE, YOUTUBE_LIVE_ID, YOUTUBE_STREAM_KEY
+
+from livestream.config import AVATARTALK_AVATAR, AVATARTALK_LANGUAGE
 from livestream.core import AvatarTalkStreamer
 
 
@@ -27,7 +27,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "video_id",
         nargs="?",
         default=None,
-        help="YouTube Live video ID. Falls back to $YOUTUBE_LIVE_ID if omitted.",
+        help="Optional explicit broadcast ID. Omit to find or create a broadcast automatically via OAuth.",
     )
     parser.add_argument("--background-url", type=str, default=None, help="Background image URL")
     parser.add_argument(
@@ -36,7 +36,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=AVATARTALK_LANGUAGE or "en",
         help="Language to use in stream (default: $AVATARTALK_LANGUAGE or 'en')",
     )
-    parser.add_argument("--stream-key", type=str, default=None, help="YouTube RTMP stream key (overrides env/json)")
+
     parser.add_argument("--avatar", type=str, default=None, help="AvatarTalk avatar name (overrides env/json)")
     parser.add_argument(
         "--log-level",
@@ -64,20 +64,14 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("Log level: %s", args.log_level)
     logger.info("Language: %s", args.language)
 
-    video_id = args.video_id or YOUTUBE_LIVE_ID
+    video_id = args.video_id
     if not video_id:
-        logger.info("No video ID passed via CLI/env — will auto-detect or create a broadcast via YouTube OAuth.")
+        logger.info("Automatic YouTube mode: finding or creating a broadcast and RTMP stream via OAuth.")
 
     try:
         voice_id = _load_optional_json_mapping("voices.json", args.language) or "default"
         logger.debug("Voice ID: %s", voice_id)
 
-        stream_key = (
-            args.stream_key
-            or _load_optional_json_mapping("stream_keys.json", args.language)
-            or YOUTUBE_STREAM_KEY
-            or ""
-        )
 
         avatar_name = (
             args.avatar
@@ -91,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.skip_welcome:
             logger.info("Skip welcome mode: ENABLED (will delay initial narration)")
         streamer = AvatarTalkStreamer(
-            video_id, args.language, voice_id, stream_key, avatar_name, args.background_url,
+            video_id, args.language, voice_id, avatar_name, args.background_url,
             skip_welcome=args.skip_welcome
         )
 

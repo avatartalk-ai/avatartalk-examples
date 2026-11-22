@@ -1,6 +1,6 @@
 import logging
 import os
-import sys
+
 import threading
 import time
 from datetime import UTC, datetime
@@ -61,7 +61,7 @@ class YouTubeCommentManager:
         self.token_path = GOOGLE_TOKEN_PATH
         self.chat_start_ts = None
         self._api_lock = threading.RLock()
-        self._bound_stream_ids: dict[str, str] = {}
+        self.broadcast_status: str | None = None
         self.creds: Credentials | None = None
 
         # Initialize requests session for connection pooling
@@ -158,10 +158,13 @@ class YouTubeCommentManager:
             request = self.youtube.liveBroadcasts().list(
                 part="id,snippet,contentDetails,status",
                 mine=True,
-                maxResults=25,
+                maxResults=50,
             )
-            response = request.execute()
-            items = response.get("items", [])
+            items = []
+            while request is not None:
+                response = request.execute()
+                items.extend(response.get("items", []))
+                request = self.youtube.liveBroadcasts().list_next(request, response)
 
             lang_keywords = {
                 "en": "english",
@@ -173,15 +176,15 @@ class YouTubeCommentManager:
             }
             target_keyword = lang_keywords.get(language, language).lower()
 
-            # Prefer 'live' or 'testing' broadcasts, then 'ready'/'upcoming' matching stream_id or language keyword
-            for desired_statuses in (("live", "testing"), ("ready", "upcoming", "created")):
+            # Match the language, not an arbitrary shared/default RTMP key.
+            for desired_statuses in (("live", "liveStarting", "testing", "testStarting"), ("ready", "created")):
                 for item in items:
                     status = item.get("status", {}).get("lifeCycleStatus")
                     if status not in desired_statuses:
                         continue
-                    bound_stream_id = item.get("contentDetails", {}).get("boundStreamId")
+
                     title = item.get("snippet", {}).get("title", "").lower()
-                    if (stream_id and bound_stream_id == stream_id) or (target_keyword and target_keyword in title):
+                    if target_keyword and target_keyword in title:
                         video_id = item["id"]
                         logger.info(
                             "Found %s broadcast for %s: %s (%s)",
@@ -195,11 +198,57 @@ class YouTubeCommentManager:
             logger.info("No active/ready live broadcast found for language '%s'", language)
             return None
 
-        except Exception as e:
-            logger.exception("Error finding live stream: %s", e)
-            return None
+        except Exception:
+            # API/auth failures are not evidence that no broadcast exists.
+            # Fail instead of creating duplicates on each automatic restart.
+            logger.error("Could not list YouTube broadcasts")
+            raise
 
-    def ensure_live_broadcast(self, video_id: str | None = None, language: str = "en") -> tuple[str, str | None, str | None]:
+    def _resolve_broadcast_stream(self, video_id: str, fallback_stream_id: str | None) -> tuple[str, str, str]:
+        """Resolve ingest credentials from this broadcast's binding, never from an unrelated stream."""
+        items = self.youtube.liveBroadcasts().list(
+            part="id,contentDetails,status", id=video_id
+        ).execute().get("items", [])
+        if not items:
+            raise ValueError(f"YouTube broadcast {video_id} was not found")
+        stream_id = items[0].get("contentDetails", {}).get("boundStreamId")
+        if not stream_id:
+            if not fallback_stream_id:
+                raise ValueError(f"Broadcast {video_id} lost its RTMP binding; retry startup")
+            self.youtube.liveBroadcasts().bind(
+                id=video_id, part="id,contentDetails", streamId=fallback_stream_id
+            ).execute()
+            stream_id = fallback_stream_id
+        streams = self.youtube.liveStreams().list(part="id,cdn", id=stream_id).execute().get("items", [])
+        ingestion = streams[0].get("cdn", {}).get("ingestionInfo", {}) if streams else {}
+        address, key = ingestion.get("ingestionAddress"), ingestion.get("streamName")
+        if not address or not key:
+            raise ValueError(f"No RTMP ingest credentials available for broadcast {video_id}")
+        logger.info("Using RTMP stream %s bound to broadcast %s", stream_id, video_id)
+        return video_id, address, key
+
+    def _ensure_rtmp_stream(self, language: str) -> str:
+        """Reuse our language-specific RTMP stream or create it automatically."""
+        title = f"AvatarTalk {language} RTMP"
+        request = self.youtube.liveStreams().list(part="id,snippet,cdn", mine=True, maxResults=50)
+        while request is not None:
+            response = request.execute()
+            for stream in response.get("items", []):
+                if stream.get("snippet", {}).get("title") == title and stream.get("cdn", {}).get("ingestionType") == "rtmp":
+                    return stream["id"]
+            request = self.youtube.liveStreams().list_next(request, response)
+        stream = self.youtube.liveStreams().insert(
+            part="snippet,cdn,contentDetails",
+            body={
+                "snippet": {"title": title},
+                "cdn": {"ingestionType": "rtmp", "resolution": "variable", "frameRate": "variable"},
+                "contentDetails": {"isReusable": True},
+            },
+        ).execute()
+        logger.info("Created RTMP stream %s for %s", stream["id"], language)
+        return stream["id"]
+
+    def ensure_live_broadcast(self, video_id: str | None = None, language: str = "en") -> tuple[str, str, str]:
         """
         Ensure a valid (non-complete) live broadcast and bound RTMP stream exist.
 
@@ -216,25 +265,6 @@ class YouTubeCommentManager:
         }
         lang_name = lang_names.get(language, "English")
 
-        # 1. Find matching RTMP liveStream for this language
-        streams_resp = self.youtube.liveStreams().list(part="id,snippet,cdn,status", mine=True, maxResults=25).execute()
-        streams = streams_resp.get("items", [])
-        chosen_stream = None
-        for s in streams:
-            if lang_name.lower() in s.get("snippet", {}).get("title", "").lower():
-                chosen_stream = s
-                break
-        if not chosen_stream and streams:
-            chosen_stream = streams[0]
-
-        rtmp_url = None
-        stream_key = None
-        stream_id = None
-        if chosen_stream:
-            stream_id = chosen_stream["id"]
-            ingestion = chosen_stream.get("cdn", {}).get("ingestionInfo", {})
-            rtmp_url = ingestion.get("ingestionAddress")
-            stream_key = ingestion.get("streamName")
 
         # 2. Check if provided video_id is still usable (not 'complete' or 'revoked')
         if video_id:
@@ -247,23 +277,25 @@ class YouTubeCommentManager:
                     b_item = b_items[0]
                     lifecycle = b_item.get("status", {}).get("lifeCycleStatus")
                     if lifecycle not in ("complete", "revoked"):
-                        bound_id = b_item.get("contentDetails", {}).get("boundStreamId")
-                        if not bound_id and stream_id:
-                            self.youtube.liveBroadcasts().bind(
-                                id=video_id, part="id,contentDetails", streamId=stream_id
-                            ).execute()
                         logger.info("Using existing broadcast %s (status: %s)", video_id, lifecycle)
-                        return video_id, rtmp_url, stream_key
-                    logger.warning("Broadcast %s has status '%s'; looking for or creating an active one...", video_id, lifecycle)
-            except Exception as e:
-                logger.warning("Could not verify broadcast %s: %s", video_id, e)
+                        bound_id = b_item.get("contentDetails", {}).get("boundStreamId")
+                        fallback = None if bound_id else self._ensure_rtmp_stream(language)
+                        return self._resolve_broadcast_stream(video_id, fallback)
+                    raise ValueError(f"Broadcast {video_id} has terminal status {lifecycle}; select another broadcast")
+                raise ValueError(f"YouTube broadcast {video_id} was not found")
+            except Exception:
+                # An explicit target must not silently become another broadcast.
+                logger.error("Could not resolve the requested YouTube broadcast %s", video_id)
+                raise
 
         # 3. Look for an existing active/ready broadcast for this language/stream
-        existing_id = self.find_live_stream(language=language, stream_id=stream_id)
+        existing_id = self.find_live_stream(language=language)
         if existing_id:
-            return existing_id, rtmp_url, stream_key
+            # Route through the verified explicit-ID path, including binding.
+            return self.ensure_live_broadcast(video_id=existing_id, language=language)
 
         # 4. Create a new broadcast and bind it to the stream
+        stream_id = self._ensure_rtmp_stream(language)
         now_iso = datetime.now(UTC).isoformat()
         title = f"AI {lang_name} Coach - Real-Time Conversation & Business {lang_name} | AvatarTalk"
         description = (
@@ -306,7 +338,7 @@ class YouTubeCommentManager:
             ).execute()
             logger.info("Bound broadcast %s to stream %s (%s)", new_video_id, stream_id, lang_name)
 
-        return new_video_id, rtmp_url, stream_key
+        return self._resolve_broadcast_stream(new_video_id, stream_id)
 
     def _get_channel_id(self, channel_name: str) -> str | None:
         """Get channel ID from channel name."""
@@ -321,24 +353,25 @@ class YouTubeCommentManager:
             return None
 
     def get_live_chat_id(self, video_id: str) -> str | None:
-        """Get live chat ID from video ID."""
+        """Resolve the owner's broadcast chat, including before public playback starts."""
         try:
             with self._api_lock:
                 self._ensure_valid_credentials()
-                request = self.youtube.videos().list(part="snippet,liveStreamingDetails", id=video_id)
+                request = self.youtube.liveBroadcasts().list(part="snippet,status", id=video_id)
                 response = request.execute()
 
-            if response.get("items") and response["items"][0].get("liveStreamingDetails"):
-                live_chat_id = response["items"][0]["liveStreamingDetails"].get("activeLiveChatId")
+            if response.get("items"):
+                live_chat_id = response["items"][0].get("snippet", {}).get("liveChatId")
                 if live_chat_id:
                     self.live_chat_id = live_chat_id
-                    print(f"Live chat ID: {live_chat_id}", file=sys.stderr)
+                    logger.debug("Resolved live chat for broadcast %s", video_id)
                     if not self.chat_start_ts:
                         self.chat_start_ts = datetime.now(UTC)
 
                     return live_chat_id
 
-            raise ValueError("Live chat ID not found")
+            logger.debug("YouTube has not exposed live chat for broadcast %s yet; will retry", video_id)
+            return None
 
         except Exception as e:
             logger.exception("Error getting live chat ID: %s", e)
@@ -592,28 +625,22 @@ class YouTubeCommentManager:
             video_id: The YouTube video ID of the live stream
 
         Returns:
-            The stream status ('active', 'noData', etc.) or None if unavailable
+            'active' when ingest is active, otherwise its health status or None.
 
         """
         try:
             with self._api_lock:
                 self._ensure_valid_credentials()
-                livestream_id = self._bound_stream_ids.get(video_id)
-                lifecycle = None
-                enable_auto_start = True
-
-                if not livestream_id:
-                    request = self.youtube.liveBroadcasts().list(
-                        part="id,snippet,contentDetails,status", id=video_id
-                    )
-                    response = request.execute()
-                    if response.get("items") and response["items"][0].get("contentDetails"):
-                        broadcast_item = response["items"][0]
-                        lifecycle = broadcast_item.get("status", {}).get("lifeCycleStatus")
-                        enable_auto_start = broadcast_item.get("contentDetails", {}).get("enableAutoStart", False)
-                        livestream_id = broadcast_item["contentDetails"].get("boundStreamId")
-                        if livestream_id:
-                            self._bound_stream_ids[video_id] = livestream_id
+                # Lifecycle cannot be cached: testing/liveStarting must be
+                # observed again before the next transition can be requested.
+                response = self.youtube.liveBroadcasts().list(
+                    part="id,contentDetails,status", id=video_id
+                ).execute()
+                broadcast_item = next(iter(response.get("items", [])), {})
+                details = broadcast_item.get("contentDetails", {})
+                lifecycle = broadcast_item.get("status", {}).get("lifeCycleStatus")
+                self.broadcast_status = lifecycle
+                livestream_id = details.get("boundStreamId")
 
                 if not livestream_id:
                     logger.warning("No boundStreamId found for video ID: %s", video_id)
@@ -626,8 +653,9 @@ class YouTubeCommentManager:
                 if items:
                     stream_status = items[0].get("status", {}).get("streamStatus")
                     health_status = items[0].get("status", {}).get("healthStatus", {}).get("status")
-                    if stream_status == "active" and not enable_auto_start and lifecycle in ("ready", "testing"):
-                        target_state = "testing" if lifecycle == "ready" else "live"
+                    if stream_status == "active" and lifecycle in ("ready", "testing"):
+                        monitor_enabled = details.get("monitorStream", {}).get("enableMonitorStream", False)
+                        target_state = "testing" if lifecycle == "ready" and monitor_enabled else "live"
                         try:
                             logger.info(
                                 "Transitioning broadcast %s from '%s' to '%s'...", video_id, lifecycle, target_state
@@ -636,7 +664,16 @@ class YouTubeCommentManager:
                                 broadcastStatus=target_state, id=video_id, part="id,status"
                             ).execute()
                         except Exception as te:
-                            logger.debug("Could not transition broadcast %s to %s: %s", video_id, target_state, te)
+                            logger.warning("Could not transition broadcast %s to %s: %s", video_id, target_state, te)
+                    issues = items[0].get("status", {}).get("healthStatus", {}).get("configurationIssues", [])
+                    if issues:
+                        logger.warning("YouTube ingest health=%s, issues=%s", health_status,
+                                       ", ".join(issue.get("type", "unknown") for issue in issues))
+                    if stream_status == "active":
+                        logger.info("YouTube broadcast %s: state=%s, ingest=active, health=%s", video_id, lifecycle, health_status)
+                        # Bad ingest health is actionable, but restarting an active
+                        # publisher would create another interruption.
+                        return "bad" if health_status in ("bad", "noData") else "active"
                     if health_status:
                         logger.debug(
                             "Stream status for %s: %s (streamStatus=%s)", video_id, health_status, stream_status

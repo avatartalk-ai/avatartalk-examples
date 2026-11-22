@@ -2,10 +2,11 @@ import asyncio
 import contextlib
 import json
 import logging
-import os
+import math
+
 import random
 import signal
-import sys
+
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -23,10 +24,11 @@ from livestream.config import (
     AVATARTALK_TTS_PROVIDER,
     AVATARTALK_URL,
     YOUTUBE_API_KEY,
-    YOUTUBE_RTMP_URL,
-    YOUTUBE_STREAM_KEY,
+
+
 )
 from livestream.context_store import GlobalContextStore
+from livestream.pacing import NarrationPacer
 from livestream.youtube import YouTubeCommentManager
 
 logger = logging.getLogger(__name__)
@@ -89,10 +91,10 @@ class AvatarTalkStreamer:
 
     def __init__(
         self,
-        live_id: str,
+        live_id: str | None,
         language: str,
         voice_id: str,
-        stream_key: str,
+
         avatar_name: str,
         background_url: str | None = None,
         skip_welcome: bool = False,
@@ -120,7 +122,7 @@ class AvatarTalkStreamer:
         self.youtube_live_id = live_id
         self.stream_language = language
         self.voice_id = voice_id
-        self.stream_key = stream_key or YOUTUBE_STREAM_KEY
+
         self.avatar_name = avatar_name
         self.skip_welcome = skip_welcome
         # Track if we've waited for the welcome skip period
@@ -167,8 +169,8 @@ class AvatarTalkStreamer:
             language=self.stream_language,
         )
         self.youtube_live_id = ensured_id
-        self.rtmp_url = YOUTUBE_RTMP_URL or ensured_rtmp_url or "rtmp://a.rtmp.youtube.com/live2"
-        self.stream_key = self.stream_key or ensured_stream_key
+        self.rtmp_url, self.stream_key = self._select_ingestion(ensured_rtmp_url, ensured_stream_key)
+        logger.info("Selected YouTube broadcast: https://www.youtube.com/watch?v=%s", self.youtube_live_id)
 
         logger.debug("Creating AvatarTalk connector...")
         self.avatartalk_connector = AvatarTalkConnector(
@@ -196,6 +198,15 @@ class AvatarTalkStreamer:
         self._yt_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="yt-api")
 
         logger.info("AvatarTalkStreamer initialization complete")
+
+    @staticmethod
+    def _select_ingestion(bound_url, bound_key):
+        # The selected broadcast's binding is authoritative; a stale env/CLI
+        # key otherwise sends video elsewhere while chat appears to work.
+        if not bound_url or not bound_key:
+            raise ValueError("The selected YouTube broadcast has no usable RTMP ingest credentials")
+
+        return bound_url, bound_key
 
     def _init_openai_client(self) -> OpenAI:
         """Initialize OpenAI client with connection pool limits to prevent memory leaks."""
@@ -272,7 +283,7 @@ class AvatarTalkStreamer:
             return None
 
         try:
-            # Try to get live stream ID from environment or auto-detect
+            # Use the broadcast already selected through OAuth.
             live_id = self.youtube_live_id
             if not live_id:
                 logger.info("No live ID provided, attempting auto-detection...")
@@ -286,7 +297,7 @@ class AvatarTalkStreamer:
                 if live_chat_id:
                     logger.info("Successfully connected to live chat: %s", live_chat_id)
                     return live_chat_id
-                logger.warning("Could not get live chat ID for stream %s", live_id)
+                logger.debug("Live chat for broadcast %s is not available yet", live_id)
                 return None
             logger.warning("No live stream found, comment integration will be limited")
             return None
@@ -298,9 +309,8 @@ class AvatarTalkStreamer:
 
     def _create_user_prompt(self, chat_topic_hint: str | None = None) -> str:
         """Create dynamic user prompt that develops a cohesive 4-part theme before moving to a new one."""
-        word_count = random.randint(28, 36)
+        word_count = random.randint(60, 70)
         language_name = LANGUAGE_MAP.get(self.stream_language, "English")
-        include_cta = (self._segment_counter % 8) == 7
         self._segment_counter += 1
 
         covered_list = list(self.covered_topics)
@@ -309,12 +319,6 @@ class AvatarTalkStreamer:
             + "\n- ".join(covered_list[-80:])
             if covered_list
             else "No topics covered yet in this session."
-        )
-
-        cta_instruction = (
-            "At the end of this segment, casually mention that viewers can practice 1-on-1 live voice role-play at avatartalk.ai/ai-training."
-            if include_cta
-            else "Do NOT mention avatartalk.ai in this segment; focus 100% on the conversation and language insight."
         )
 
         if chat_topic_hint:
@@ -347,8 +351,7 @@ class AvatarTalkStreamer:
         return (
             f"{covered_block}\n\n"
             f"{focus_instruction}\n"
-            f"{cta_instruction}\n"
-            f"Target length for 'segment': ~{word_count} words (2–3 natural sentences in {language_name}).\n"
+            f"Target length for 'segment': ~{word_count} words (3–5 natural sentences in {language_name}; aim for about 30 seconds of speech).\n"
             'Return JSON: {"theme": "<current overarching theme>", "topic": "<specific 5-10 word sub-point taught in this segment>", "segment": "<spoken text>"}'
         )
 
@@ -396,7 +399,7 @@ class AvatarTalkStreamer:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                max_tokens=200,
+                max_tokens=450,
                 temperature=0.85,
                 response_format={"type": "json_object"},
             )
@@ -464,13 +467,15 @@ class AvatarTalkStreamer:
         return self.shutdown_requested
 
     async def _play_segment(self, segment: str) -> float:
-        """Send a segment to the connector, print it as playback starts, and return duration (seconds)."""
+        """Queue synthesized audio; its acknowledgement is not playback completion."""
         logger.debug("Sending segment and waiting for response from AvatarTalk API...")
         audio_info = await self.avatartalk_connector.send_and_receive(segment)
         duration = float(audio_info.get("audio_duration", 0.0))
+        if not math.isfinite(duration) or duration <= 0:
+            raise RuntimeError("AvatarTalk returned no usable audio duration")
         self.last_segment_sent_at = time.time()
 
-        # Output segment to stdout once synthesis is complete and playback begins
+        # The server has queued audio; video rendering/RTMP delivery may still be pending.
         print(segment, flush=True)
         print(flush=True)
 
@@ -502,7 +507,7 @@ class AvatarTalkStreamer:
                 if not self.youtube_manager.live_chat_id:
                     await loop.run_in_executor(self._yt_executor, self._setup_youtube_stream)
                     if not self.youtube_manager.live_chat_id:
-                        logger.warning(f"Still not able to get Live Chat ID, waiting {IDLE_WAIT_SECONDS}")
+                        logger.info("Waiting for YouTube live chat; retrying in %s seconds", IDLE_WAIT_SECONDS)
                         if await self._sleep_or_shutdown(IDLE_WAIT_SECONDS):
                             break
                         continue
@@ -629,18 +634,13 @@ class AvatarTalkStreamer:
             self._welcome_skip_complete = True
             logger.info("Welcome skip period complete, starting narration")
 
-        # Track monotonic time when current queued audio playback finishes on the server
-        playback_ends_at = time.monotonic()
+        pacer = NarrationPacer()
         last_narrated_message_ts: datetime | None = None
-        generation_lead_seconds = 5.0
-        send_lead_seconds = 1.8
-        first_chunk_startup_offset = 3.5
 
         while not self.shutdown_requested:
-            now = time.monotonic()
-            remaining_playback = max(0.0, playback_ends_at - now)
-            if remaining_playback > generation_lead_seconds:
-                wait_for = min(1.0, remaining_playback - generation_lead_seconds)
+            wait_for = pacer.generation_wait(time.monotonic())
+            if wait_for > 0:
+                wait_for = min(1.0, wait_for)
                 if await self._sleep_or_shutdown(wait_for):
                     break
                 continue
@@ -677,24 +677,25 @@ class AvatarTalkStreamer:
                         break
                     continue
 
-                # Wait until previous segment (including its 2.0s pause) is within `send_lead_seconds` of finishing
+                # Keep one bounded lookahead, enough to fill the next 4.8 s
+                # inference window before YouTube consumes the previous segment.
                 while not self.shutdown_requested:
-                    rem = playback_ends_at - time.monotonic()
-                    if rem <= send_lead_seconds:
+                    wait_for = pacer.send_wait(time.monotonic())
+                    if wait_for <= 0:
                         break
-                    if await self._sleep_or_shutdown(min(0.5, rem - send_lead_seconds)):
+                    if await self._sleep_or_shutdown(min(0.5, wait_for)):
                         break
                 if self.shutdown_requested:
                     break
 
                 duration = await self._play_segment(segment)
-                now_after_send = time.monotonic()
-                if self.avatartalk_connector.first_chunk_on_ws or self.avatartalk_connector.reconnected_event:
-                    self.avatartalk_connector.first_chunk_on_ws = False
-                    self.avatartalk_connector.reconnected_event = False
-                    playback_ends_at = max(now_after_send, playback_ends_at) + duration + first_chunk_startup_offset
-                else:
-                    playback_ends_at = max(now_after_send, playback_ends_at) + duration
+                new_connection = (
+                    self.avatartalk_connector.first_chunk_on_ws or self.avatartalk_connector.reconnected_event
+                )
+                pacer.acknowledge(duration, time.monotonic(), new_connection=new_connection)
+                self.avatartalk_connector.first_chunk_on_ws = False
+                self.avatartalk_connector.reconnected_event = False
+                logger.info("Estimated queued playback: %.1fs", max(0.0, pacer.playback_ends_at - time.monotonic()))
 
             except KeyboardInterrupt:
                 logger.info("Narration loop interrupted")
@@ -727,7 +728,7 @@ class AvatarTalkStreamer:
         logger.info("Healthcheck loop started")
 
         loop = asyncio.get_event_loop()
-        check_interval = 45  # Check every 45 seconds to conserve YouTube API quota
+        check_interval = 15  # Poll less frequently after YouTube confirms live.
         restart_cooldown = 60  # Wait 60 seconds after restart before checking again
 
         _iteration = 0
@@ -737,24 +738,9 @@ class AvatarTalkStreamer:
                 if await self._sleep_or_shutdown(check_interval):
                     break
 
-                # Check if we're still in cooldown period after a restart
-                time_since_restart = time.time() - self.last_connector_restart
-                if time_since_restart < restart_cooldown:
-                    remaining = restart_cooldown - time_since_restart
-                    logger.debug("Healthcheck: in cooldown period, %.1f seconds remaining", remaining)
-                    continue
 
-                # If the narration loop recently sent a chunk and received a valid duration response,
-                # the WebSocket/RTMP pipeline is actively streaming. Skip YouTube status polling to
-                # avoid false-positive 'noData' restarts between non-realtime ffmpeg frame batches.
-                since_last_segment = time.time() - self.last_segment_sent_at
-                if since_last_segment < 35.0:
-                    if _iteration > 0:
-                        logger.info("Healthcheck: Narration pipeline active, resetting counter")
-                        _iteration = 0
-                    logger.debug("Healthcheck: Narration pipeline active (last chunk %.1fs ago)", since_last_segment)
-                    continue
-
+                # A renderer acknowledgement does not prove YouTube receives
+                # video. Poll even while narration is active (also drives go-live).
                 # Check stream status (run in dedicated executor to avoid blocking)
                 try:
                     status = await asyncio.wait_for(
@@ -764,6 +750,14 @@ class AvatarTalkStreamer:
                 except TimeoutError:
                     logger.warning("Healthcheck: get_stream_status() timed out after 10s")
                     continue
+
+                lifecycle = self.youtube_manager.broadcast_status
+                if lifecycle == "live":
+                    check_interval = 45
+                elif lifecycle in ("liveStarting", "testStarting"):
+                    logger.info("YouTube broadcast %s is starting (state=%s, ingest=%s)", self.youtube_live_id, lifecycle, status)
+                elif lifecycle is not None:
+                    logger.warning("YouTube broadcast %s is not live yet (state=%s, ingest=%s)", self.youtube_live_id, lifecycle, status)
 
                 if status == "noData":
                     # Re-check after 5s to avoid false positives during brief inter-chunk pauses
@@ -779,7 +773,7 @@ class AvatarTalkStreamer:
                 if status == "noData":
                     _iteration += 1
                     logger.warning("Healthcheck: Stream status is 'noData' (iteration %d/6)", _iteration)
-                    if _iteration >= 6:
+                    if _iteration >= 6 and time.time() - self.last_connector_restart >= restart_cooldown:
                         logger.warning(
                             "Healthcheck: Stream status 'noData' persisted for 6 checks, restarting AvatarTalk connector"
                         )
@@ -820,7 +814,7 @@ class AvatarTalkStreamer:
             logger.info("Press Ctrl+C to stop")
             if self.youtube_manager:
                 logger.info("YouTube comment integration: ENABLED")
-                logger.info("Chat handling: ENABLED (separate thread)")
+                logger.info("Chat handling: %s", "READY" if self.youtube_manager.live_chat_id else "WAITING for YouTube chat")
                 logger.info("Avatar narration: ENABLED (with context awareness)")
                 logger.info("Stream health monitoring: ENABLED")
 

@@ -35,7 +35,7 @@ log_error() {
 # Parse arguments (video_id and language are optional; defaults to auto-detect and 'en')
 VIDEO_ID="${1:-}"
 LANGUAGE="${2:-en}"
-BACKGROUND_URL="${3:-}"
+BACKGROUND_URL="${3:-https://avatartalk.ai/images/backgrounds/feng_shui_2.png}"
 
 log_info "Starting AvatarTalk YouTube Streamer in infinite restart mode"
 log_info "Video ID: $VIDEO_ID"

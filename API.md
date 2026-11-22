@@ -29,7 +29,7 @@
 
 ## Authentication
 
-Include your API key in the Authorization header:
+For account-based inference, include your API key in the Authorization header. Lightning has separate authentication rules in the [payment flow overview](#payment-flow-overview).
 
 ```
 Authorization: Bearer {your_api_key}
@@ -43,8 +43,6 @@ Generate avatar videos from text (speech is synthesised for you) or from your ow
 
 - **Regular Request**: `POST https://api.avatartalk.ai/inference`
   - Returns JSON with video URLs
-- **Streaming Request**: `POST https://api.avatartalk.ai/inference?stream=true`
-  - Returns MP4 video data in real-time
 - **Video Viewer**: `GET https://api.avatartalk.ai/inference/:id/video.html`
   - Displays video in browser
 
@@ -56,7 +54,6 @@ Generate avatar videos from text (speech is synthesised for you) or from your ow
 | `avatar` | string | Yes | Avatar character to use | See [Avatar Options](#avatar-options) |
 | `emotion` | string | Yes | Emotional expression for the avatar | `"happy"`, `"neutral"`, `"serious"` |
 | `language` | string | No | Language for speech synthesis (defaults to `"en"`) | See [Language Options](#language-options) |
-| `stream` | string | No | Enable streaming mode (query parameter) | `"true"` for streaming, omit for regular response |
 | `delayed` | string/boolean | No | Enable delayed execution mode | `"true"` or `true` for delayed, omit for immediate execution |
 
 ### Audio Input (multipart upload)
@@ -187,19 +184,7 @@ Returns JSON with pending status and trigger URLs:
 
 **Note**: Both `mp4_url` and `html_url` are trigger URLs - accessing either will generate the video and consume credits.
 
-#### Streaming Request (Binary Response)
-
-Returns chunked MP4 video data as it's generated:
-
-**Headers**:
-```
-Content-Type: video/mp4
-Transfer-Encoding: chunked
-Content-Disposition: attachment; filename="video.mp4"
-Cache-Control: no-cache
-```
-
-**Body**: Raw MP4 video data streamed in real-time
+Download the generated file from the returned `mp4_url`. A text generation request with `?stream=true` returns HTTP 501 (`STREAMING_UNSUPPORTED`). For a live avatar stream, use the WebSocket interface below.
 
 ## WebSocket /ws/infer
 
@@ -760,10 +745,12 @@ Pay for avatar video generation using Bitcoin Lightning Network payments. This p
 
 ### Payment Flow Overview
 
-1. **Request Video**: Submit text or audio to `/lightning/request-video/text` or `/lightning/request-video/audio`
-2. **Receive Invoice**: Get a BOLT11 invoice with the cost and duration estimate
-3. **Pay Invoice**: Pay the BOLT11 invoice using your Lightning wallet
-4. **Generate Video**: Call `/lightning/generate-video` with the invoice to retrieve your video
+1. Submit text or a WAV file to get a BOLT11 invoice and the price in satoshis.
+2. Pay the exact invoice with a Lightning wallet.
+3. Check `GET /lightning/payment/{invoice}`. A signed notification from Spark changes the status from `pending` to `paid`. If you have already paid and the notification is delayed, you can supply the payment preimage from your wallet in the next step.
+4. Call `POST /lightning/generate-video` with the same invoice to download the MP4. Each request can be redeemed once.
+
+The quote, individual status and video endpoints are public. Only the administrative payment list requires a load-balancer API key. Spark sends settlement notifications to `POST /lightning/spark/webhook`. The video client only needs the invoice and, optionally, its payment preimage.
 
 ### POST /lightning/request-video/text
 
@@ -792,7 +779,7 @@ POST https://api.avatartalk.ai/lightning/request-video/text
 ```json
 {
   "duration": 4.5,
-  "bolt11_invoice": "lnbc450n1p3...",
+  "bolt11_invoice": "lnbc4500n1p3...",
   "amount": 450
 }
 ```
@@ -844,7 +831,7 @@ Multipart form data with an audio file:
 ```json
 {
   "duration": 8.2,
-  "bolt11_invoice": "lnbc820n1p3...",
+  "bolt11_invoice": "lnbc8200n1p3...",
   "amount": 820
 }
 ```
@@ -857,7 +844,9 @@ Multipart form data with an audio file:
 
 #### Error Responses
 
-**400 Bad Request - Missing File**:
+Omitting the required multipart field `audio` returns HTTP 422. Invoice creation for both text and audio can return HTTP 503 when the payment service or USD exchange rate is unavailable.
+
+**400 Bad Request - Empty Filename**:
 ```json
 {
   "detail": "Audio file is required"
@@ -899,7 +888,7 @@ POST https://api.avatartalk.ai/lightning/generate-video
 
 ```json
 {
-  "bolt11_invoice": "lnbc450n1p3...",
+  "bolt11_invoice": "lnbc4500n1p3...",
   "avatar": "european_woman",
   "emotion": "happy",
   "language": "en"
@@ -909,15 +898,16 @@ POST https://api.avatartalk.ai/lightning/generate-video
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `bolt11_invoice` | string | Yes | The BOLT11 invoice from the request step (must be paid) |
-| `avatar` | string | Yes | Avatar character to use (see [Avatar Options](#avatar-options)) |
-| `emotion` | string | Yes | Avatar emotional expression: `"happy"`, `"neutral"`, `"serious"`, `"expressive"` |
+| `payment_preimage` | string | No | Proof from the paying wallet, encoded as 64 hexadecimal characters. Supply it if the invoice still shows `pending` after payment. |
+| `avatar` | string | No | Defaults to `european_woman`. See [Avatar Options](#avatar-options) to choose another deployed avatar. |
+| `emotion` | string | No | Defaults to `neutral`. Supported expressions include `"happy"`, `"neutral"`, `"serious"`, `"expressive"` |
 | `language` | string | No | Language code for speech synthesis (see [Language Options](#language-options)) |
 
 **Note**: If `emotion` is set to `"expressive"`, it will be automatically converted to `"neutral"` for processing.
 
 #### Response
 
-Returns a streaming MP4 video file:
+Returns a single-use MP4 download. Save the response as it arrives. If the connection is interrupted, the invoice cannot retrieve the video again.
 
 **Headers**:
 ```
@@ -932,24 +922,26 @@ Cache-Control: no-cache
 **400 Bad Request - Invoice Not Paid**:
 ```json
 {
-  "detail": "Invoice not paid in time."
+  "detail": "Invoice is not paid yet"
 }
 ```
+
+A mismatched proof or an already redeemed request also returns HTTP 400. A malformed proof returns HTTP 422. HTTP 409 means generation is busy or timed out.
 
 **404 Not Found - Invoice Not Found**:
 ```json
 {
-  "detail": "Invoice lnbc450n1p... not found."
+  "detail": "Invoice lnbc4500n1... not found."
 }
 ```
 
 #### Example Request
 
 ```bash
-curl -X POST https://api.avatartalk.ai/lightning/generate-video \
+curl -fsS -X POST https://api.avatartalk.ai/lightning/generate-video \
   -H "Content-Type: application/json" \
   -d '{
-    "bolt11_invoice": "lnbc450n1p3...",
+    "bolt11_invoice": "lnbc4500n1p3...",
     "avatar": "japanese_woman",
     "emotion": "happy",
     "language": "en"
@@ -975,16 +967,16 @@ GET https://api.avatartalk.ai/lightning/payment/{invoice}
 
 #### Response
 
-Returns payment details:
+The status response includes the price in USD (`amount`) and the invoiced amount in satoshis (`amount_sat`).
 
 ```json
 {
-  "invoice": "lnbc450n1p3...",
+  "id": 1,
+  "bolt11_invoice": "lnbc4500n1p3...",
+  "amount": 0.0075,
+  "currency": "USD",
   "amount_sat": 450,
-  "amount_usd": 0.15,
-  "status": "paid",
-  "created_at": "2025-09-29T12:00:00Z",
-  "paid_at": "2025-09-29T12:01:30Z"
+  "status": "paid"
 }
 ```
 
@@ -1000,94 +992,52 @@ Returns payment details:
 #### Example Request
 
 ```bash
-curl -X GET https://api.avatartalk.ai/lightning/payment/lnbc450n1p3... \
-  -H "Authorization: Bearer your_api_key"
+curl -fsS "https://api.avatartalk.ai/lightning/payment/$INVOICE"
 ```
 
 ### GET /lightning/payments
 
-List all Lightning payments (requires authentication).
-
-#### Endpoint
-
-```
-GET https://api.avatartalk.ai/lightning/payments
-```
-
-#### Authentication
-
-Requires API key:
-```
-Authorization: Bearer {your_api_key}
-```
-
-#### Response
-
-Returns an array of all payment records:
-
-```json
-[
-  {
-    "id": 1,
-    "invoice": "lnbc450n1p3...",
-    "amount_sat": 450,
-    "amount_usd": 0.15,
-    "status": "paid",
-    "created_at": "2025-09-29T12:00:00Z",
-    "paid_at": "2025-09-29T12:01:30Z"
-  },
-  {
-    "id": 2,
-    "invoice": "lnbc820n1p3...",
-    "amount_sat": 820,
-    "amount_usd": 0.28,
-    "status": "pending",
-    "created_at": "2025-09-29T12:05:00Z",
-    "paid_at": null
-  }
-]
-```
-
-#### Example Request
+Lists all payment records as a JSON array. Each item has the same fields as the individual status response. This administrative endpoint requires the `X-API-Key` header and returns HTTP 403 for a missing or invalid key.
 
 ```bash
-curl -X GET https://api.avatartalk.ai/lightning/payments \
-  -H "Authorization: Bearer your_api_key"
+curl -fsS https://api.avatartalk.ai/lightning/payments \
+  -H "X-API-Key: $LOAD_BALANCER_API_KEY"
 ```
 
 ### Lightning Payment Example Workflow
 
-Here's a complete example of the Lightning payment workflow:
+Run these Bash snippets in the same terminal with `curl` and `jq` installed. Set `BASE_URL` to use a local or staging API.
 
 ```bash
-# Step 1: Request a video from text
-RESPONSE=$(curl -X POST https://api.avatartalk.ai/lightning/request-video/text \
-  -H "Content-Type: application/json" \
-  -d '{"text": "Hello from AvatarTalk!"}')
+BASE_URL=${BASE_URL:-https://api.avatartalk.ai}
+QUOTE=$(curl -fsS "$BASE_URL/lightning/request-video/text" \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"Hello from AvatarTalk!"}')
+INVOICE=$(jq -er '.bolt11_invoice' <<< "$QUOTE")
+jq -r '"Pay \(.amount) satoshis to:\n\(.bolt11_invoice)"' <<< "$QUOTE"
+```
 
-# Extract invoice and amount
-INVOICE=$(echo $RESPONSE | jq -r '.bolt11_invoice')
-AMOUNT=$(echo $RESPONSE | jq -r '.amount')
-echo "Invoice: $INVOICE"
-echo "Amount: $AMOUNT sats"
+Pay the displayed invoice in your wallet, then run the following block. If the status is still `pending`, paste the payment preimage from the wallet receipt or press Enter and run this block again after confirmation.
 
-# Step 2: Pay the invoice using your Lightning wallet
-# (Use your preferred Lightning wallet or CLI tool)
-# lightning-cli pay $INVOICE
-
-# Step 3: Check payment status (optional)
-curl -X GET https://api.avatartalk.ai/lightning/payment/$INVOICE
-
-# Step 4: Generate and download the video
-curl -X POST https://api.avatartalk.ai/lightning/generate-video \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"bolt11_invoice\": \"$INVOICE\",
-    \"avatar\": \"european_woman\",
-    \"emotion\": \"happy\",
-    \"language\": \"en\"
-  }" \
-  --output my_video.mp4
+```bash
+(
+  set -euo pipefail
+  STATUS=$(curl -fsS "$BASE_URL/lightning/payment/$INVOICE" | jq -er '.status')
+  PAYLOAD=$(jq -n --arg invoice "$INVOICE" '{bolt11_invoice: $invoice, avatar: "european_woman"}')
+  case "$STATUS" in
+    paid) ;;
+    pending)
+      read -rs -p 'Payment preimage (Enter to wait): ' PROOF
+      printf '\n'
+      [[ -n "$PROOF" ]] || exit 0
+      PAYLOAD=$(jq --arg proof "$PROOF" '. + {payment_preimage: $proof}' <<< "$PAYLOAD")
+      ;;
+    *) printf 'Payment status: %s\n' "$STATUS" >&2; exit 1 ;;
+  esac
+  curl -fsS "$BASE_URL/lightning/generate-video" \
+    -H 'Content-Type: application/json' \
+    --data-binary @- --output my_video.mp4 <<< "$PAYLOAD"
+)
 ```
 
 ## Costs
@@ -1108,10 +1058,6 @@ Check your account balance through the AvatarTalk dashboard to monitor remaining
 
 ### Lightning Network Payments
 
-When using Lightning Network endpoints (`/lightning/*`), payment is calculated based on the estimated or actual duration of the generated video:
+The service prices video by duration using a configurable USD rate (default $0.10 per minute). For text it estimates speech duration. For WAV input it measures the recording. It converts the USD price to satoshis using the BTC/USD rate from Spark and applies its invoice limits.
 
-- **Cost per second**: Determined by the current market rate (returned in the invoice)
-- **Payment method**: Bitcoin Lightning Network (BOLT11 invoices)
-- **Instant settlement**: Videos are generated immediately after invoice payment is confirmed
-
-The exact cost in satoshis and USD is provided in the response when you request a video. Payment must be completed before the video can be generated.
+Use `amount` in the **invoice creation response** for the price to pay in satoshis. In the **payment status response**, `amount` is the USD price and `amount_sat` is the invoiced number of satoshis.

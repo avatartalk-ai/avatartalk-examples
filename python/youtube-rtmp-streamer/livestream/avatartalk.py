@@ -41,7 +41,7 @@ class AvatarTalkConnector:
         self.stream_key = stream_key
         self.background_url = background_url
         if not rtmp_url or not stream_key:
-            raise ValueError("YOUTUBE_RTMP_URL and YOUTUBE_STREAM_KEY are required for RTMP output")
+            raise ValueError("YouTube OAuth did not resolve the broadcast's RTMP address and stream key")
         self.url = self._build_url()
 
         self._ws: websockets.ClientConnection | None = None

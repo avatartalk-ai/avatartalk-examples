@@ -4,10 +4,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-YOUTUBE_RTMP_URL = os.getenv("YOUTUBE_RTMP_URL")
-YOUTUBE_STREAM_KEY = os.getenv("YOUTUBE_STREAM_KEY")
+
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
-YOUTUBE_LIVE_ID = os.getenv("YOUTUBE_LIVE_ID")
+
 GOOGLE_CLIENT_SECRETS_PATH = os.getenv("GOOGLE_CLIENT_SECRETS_PATH")
 GOOGLE_TOKEN_PATH = os.getenv("GOOGLE_TOKEN_PATH", "token.json")
 LIVEKIT_URL = os.getenv("LIVEKIT_URL")
