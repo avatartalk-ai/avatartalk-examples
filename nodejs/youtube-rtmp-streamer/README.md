@@ -2,6 +2,8 @@
 
 Small Node.js app that generates short English‑learning segments with OpenAI and streams them via AvatarTalk to a YouTube Live RTMP endpoint. It can also read live chat, adapt the next topic accordingly, and post generated responses back to the live chat.
 
+**Demo:** See the streamer in action on our [AvatarTalk YouTube channel](https://www.youtube.com/@AvatarTalk-ai).
+
 ## Quick Start
 - Requirements: Node.js 18+ and npm.
 - Install deps: `cd nodejs/youtube-rtmp-streamer && npm install`

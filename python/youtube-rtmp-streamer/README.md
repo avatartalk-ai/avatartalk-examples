@@ -2,6 +2,8 @@
 
 Small Python app that generates short language‑learning segments with OpenAI and streams them via AvatarTalk to a YouTube Live RTMP endpoint. Supports multiple languages. It can also read live chat, adapt the next topic accordingly, and post generated responses back to the live chat.
 
+**Demo:** See the streamer in action on our [AvatarTalk YouTube channel](https://www.youtube.com/@AvatarTalk-ai).
+
 ## Quick Start
 - Requirements: Python 3.13, `uv`.
 - Install deps: `uv sync`
